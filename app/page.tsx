@@ -14,6 +14,24 @@ type View = (typeof navItems)[number][0];
 
 const pipeline = ["Upload", "OCR", "Clean", "Detect", "Chunk", "PII", "Embed", "Index", "Ready"];
 
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = document.execCommand("copy");
+    document.body.removeChild(textarea);
+    return copied;
+  }
+}
+
 function Dot({ tone = "green" }: { tone?: "green" | "amber" | "blue" | "red" }) {
   return <span className={`dot dot-${tone}`} aria-hidden="true" />;
 }
@@ -174,6 +192,7 @@ function Overview({ navigate }: { navigate: (view: View) => void }) {
 function Gateway() {
   const [routing, setRouting] = useState(true);
   const [selected, setSelected] = useState("Balanced routing");
+  const [copied, setCopied] = useState(false);
   return (
     <>
       <SectionHeader
@@ -192,12 +211,16 @@ function Gateway() {
         <section className="panel routing-card">
           <div className="panel-head">
             <div><span className="kicker">ROUTING POLICY</span><h2>Production gateway</h2></div>
-            <button className={`toggle ${routing ? "on" : ""}`} aria-label="Toggle routing policy" onClick={() => setRouting(!routing)}><span /></button>
+            <button className={`toggle ${routing ? "on" : ""}`} aria-label="Toggle routing policy" aria-pressed={routing} onClick={() => setRouting(!routing)}><span /></button>
           </div>
           <div className="endpoint-box">
             <span>BASE URL</span>
             <code>https://private-ai.company/v1</code>
-            <button onClick={() => navigator.clipboard?.writeText("https://private-ai.company/v1")}>Copy</button>
+            <button onClick={async () => {
+              const success = await copyText("https://private-ai.company/v1");
+              setCopied(success);
+              window.setTimeout(() => setCopied(false), 1800);
+            }}>{copied ? "Copied!" : "Copy"}</button>
           </div>
           <label className="field-label">ROUTING STRATEGY</label>
           <div className="segmented">
@@ -410,6 +433,7 @@ function Integrations() {
 
 function Developers() {
   const [lang, setLang] = useState("curl");
+  const [copied, setCopied] = useState(false);
   const code: Record<string, string> = {
     curl: `curl https://private-ai.company/v1/chat/completions \\\n  -H "Authorization: Bearer $PRIVATE_AI_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "model": "auto",\n    "messages": [{"role": "user", "content": "Hello"}],\n    "knowledge_base": "engineering"\n  }'`,
     python: `from privateai import PrivateAI\n\nclient = PrivateAI(base_url=PRIVATE_AI_URL)\nresponse = client.chat.completions.create(\n    model="auto",\n    messages=[{"role": "user", "content": "Hello"}]\n)`,
@@ -420,7 +444,11 @@ function Developers() {
       <SectionHeader eyebrow="DEVELOPER PLATFORM" title="OpenAI compatible. Infrastructure independent." description="Move existing applications onto private inference by changing one base URL—then unlock agents, search, documents, and workflows." action={<><button className="btn btn-secondary">API reference ↗</button><button className="btn btn-primary">+ Create API key</button></>} />
       <div className="dev-layout">
         <section className="panel endpoint-list"><span className="kicker">API ENDPOINTS</span>{["/v1/chat/completions", "/v1/embeddings", "/v1/documents", "/v1/search", "/v1/workflows", "/v1/agents", "/v1/models"].map((e, i) => <button className={i === 0 ? "active" : ""} key={e}><Tag tone={i < 2 ? "green" : "blue"}>{i < 2 ? "POST" : i === 6 ? "GET" : "POST"}</Tag><code>{e}</code><span>›</span></button>)}</section>
-        <section className="code-panel"><div className="code-tabs">{["curl", "python", "node"].map(l => <button className={lang === l ? "active" : ""} onClick={() => setLang(l)} key={l}>{l === "node" ? "Node.js" : l[0].toUpperCase() + l.slice(1)}</button>)}<button className="copy-code" onClick={() => navigator.clipboard?.writeText(code[lang])}>Copy</button></div><pre><code>{code[lang]}</code></pre><div className="code-status"><Dot /> Runs entirely inside your private network</div></section>
+        <section className="code-panel"><div className="code-tabs">{["curl", "python", "node"].map(l => <button className={lang === l ? "active" : ""} onClick={() => setLang(l)} key={l}>{l === "node" ? "Node.js" : l[0].toUpperCase() + l.slice(1)}</button>)}<button className="copy-code" onClick={async () => {
+          const success = await copyText(code[lang]);
+          setCopied(success);
+          window.setTimeout(() => setCopied(false), 1800);
+        }}>{copied ? "Copied!" : "Copy"}</button></div><pre><code>{code[lang]}</code></pre><div className="code-status"><Dot /> Runs entirely inside your private network</div></section>
       </div>
       <div className="sdk-grid">{[["PY", "Python SDK", "pip install privateai"], ["JS", "Node SDK", "npm i @privateai/sdk"], ["JV", "Java SDK", "com.privateai:sdk"], ["GO", "Go SDK", "go get privateai.dev/go"]].map(s => <article className="sdk-card" key={s[0]}><i>{s[0]}</i><div><b>{s[1]}</b><code>{s[2]}</code></div><button>View docs →</button></article>)}</div>
     </>
@@ -462,7 +490,7 @@ function Security() {
       </div>
       <div className="two-col">
         <section className="panel"><div className="panel-head"><div><span className="kicker">RECENT AUDIT EVENTS</span><h2>Immutable activity log</h2></div><button className="text-btn">Open audit log →</button></div>{[["API key created", "priya.shah@company.com", "2 min ago"], ["Model route updated", "platform-admin", "18 min ago"], ["Bulk export approved", "legal-reviewers", "1 hour ago"], ["MFA policy enforced", "security-admin", "3 hours ago"]].map(a => <div className="audit-row" key={a[0]}><Dot /><span><b>{a[0]}</b><small>{a[1]}</small></span><time>{a[2]}</time></div>)}</section>
-        <section className="panel admin-settings"><div className="panel-head"><div><span className="kicker">SYSTEM ADMINISTRATION</span><h2>Platform controls</h2></div></div>{[["SMTP", "smtp.internal.company", true], ["Automated backups", "Daily · 02:00", true], ["License", "Enterprise · 10,000 seats", true]].map(x => <div key={x[0]}><span><b>{x[0]}</b><small>{x[1]}</small></span><Tag tone="green">Configured</Tag></div>)}<div><span><b>Maintenance mode</b><small>Restrict access to administrators</small></span><button className={`toggle ${maintenance ? "on" : ""}`} onClick={() => setMaintenance(!maintenance)}><span /></button></div></section>
+        <section className="panel admin-settings"><div className="panel-head"><div><span className="kicker">SYSTEM ADMINISTRATION</span><h2>Platform controls</h2></div></div>{[["SMTP", "smtp.internal.company", true], ["Automated backups", "Daily · 02:00", true], ["License", "Enterprise · 10,000 seats", true]].map(x => <div key={x[0]}><span><b>{x[0]}</b><small>{x[1]}</small></span><Tag tone="green">Configured</Tag></div>)}<div><span><b>Maintenance mode</b><small>Restrict access to administrators</small></span><button className={`toggle ${maintenance ? "on" : ""}`} aria-label="Toggle maintenance mode" aria-pressed={maintenance} onClick={() => setMaintenance(!maintenance)}><span /></button></div></section>
       </div>
     </>
   );

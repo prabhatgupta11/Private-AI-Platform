@@ -1,11 +1,8 @@
 import assert from "node:assert/strict";
-import { access, readFile, readdir } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
-const developmentPreviewMeta =
-  /<meta(?=[^>]*\bname=["']codex-preview["'])(?=[^>]*\bcontent=["']development["'])[^>]*>/i;
-const templateRoot = new URL("../", import.meta.url);
-const previewRoot = new URL("../app/_sites-preview/", import.meta.url);
+const projectRoot = new URL("../", import.meta.url);
 
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -14,7 +11,10 @@ async function render() {
 
   return worker.fetch(
     new Request("http://localhost/", {
-      headers: { accept: "text/html" },
+      headers: {
+        accept: "text/html",
+        host: "localhost:3000",
+      },
     }),
     {
       ASSETS: {
@@ -28,64 +28,98 @@ async function render() {
   );
 }
 
-test("server-renders the starter loading skeleton", async () => {
+test("server-renders the complete PrivateAI overview", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, developmentPreviewMeta);
-  assert.match(html, /<title>Your site is taking shape<\/title>/i);
-  assert.match(html, /Building your site/);
-  assert.match(html, /Your site is taking shape/);
   assert.match(
     html,
-    /Your first version will appear here automatically when it’s ready\./,
+    /<title>PrivateAI Platform — Enterprise AI Infrastructure<\/title>/i,
   );
-  assert.doesNotMatch(html, /Codex/);
-  assert.match(html, /react-loading-skeleton/);
-  assert.match(html, /role="status"/);
+  assert.match(html, /The control plane for your private AI estate\./);
+  assert.match(html, /Private AI Gateway/);
+  assert.match(html, /100% local inference/);
+  assert.match(html, /PRIVATE NETWORK BOUNDARY · NO EXTERNAL EGRESS/);
+  assert.match(html, /Platform uptime/);
+  assert.match(html, /99\.98%/);
+  assert.match(html, /http:\/\/localhost:3000\/og\.png/);
+  assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
 });
 
-test("keeps the loading skeleton scoped and disposable", async () => {
-  const [preview, css, page, layout, packageJson, files] = await Promise.all([
-    readFile(new URL("SkeletonPreview.tsx", previewRoot), "utf8"),
-    readFile(new URL("preview.css", previewRoot), "utf8"),
-    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+test("covers every PRD module and named capability", async () => {
+  const data = await readFile(
+    new URL("../app/platform-data.ts", import.meta.url),
+    "utf8",
+  );
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const moduleNames = [
+    "Identity & Security",
+    "Organization Management",
+    "Knowledge Management",
+    "Document Processing Pipeline",
+    "Search Engine",
+    "AI Chat",
+    "AI Agents",
+    "Workflow Automation",
+    "Developer Platform",
+    "Model Management",
+    "Embedding Management",
+    "Vector Database",
+    "Prompt Management",
+    "Analytics Dashboard",
+    "Monitoring",
+    "Administration",
+    "Deployment",
+    "Security",
+    "AI Infrastructure",
+    "Integrations",
+    "Private AI Gateway",
+  ];
+
+  const moduleCount = (data.match(/\n\s+number: "\d{2}",/g) ?? []).length;
+  const featureArrays = [...data.matchAll(/features: \[(.*?)\],/gs)];
+  const featureCount = featureArrays.reduce(
+    (total, match) => total + (match[1].match(/"[^"]+"/g) ?? []).length,
+    0,
+  );
+
+  assert.equal(moduleCount, 21);
+  assert.equal(featureArrays.length, 21);
+  assert.equal(featureCount, 264);
+  for (const moduleName of moduleNames) {
+    assert.match(data, new RegExp(`name: "${moduleName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
+  }
+
+  assert.match(page, /case "gateway": return <Gateway/);
+  assert.match(page, /case "knowledge": return <Knowledge/);
+  assert.match(page, /case "search": return <SearchView/);
+  assert.match(page, /case "chat": return <ChatView/);
+  assert.match(page, /case "agents": return <Agents/);
+  assert.match(page, /case "workflows": return <Workflows/);
+  assert.match(page, /case "models": return <Models/);
+  assert.match(page, /case "integrations": return <Integrations/);
+  assert.match(page, /case "developers": return <Developers/);
+  assert.match(page, /case "analytics": return <Analytics/);
+  assert.match(page, /case "security": return <Security/);
+  assert.match(page, /case "infrastructure": return <Infrastructure/);
+  assert.match(page, /case "modules": return <Modules/);
+  assert.match(page, /async function copyText/);
+  assert.match(page, /aria-label="Toggle maintenance mode"/);
+});
+
+test("ships branded metadata and no starter artifacts", async () => {
+  const [layout, packageJson] = await Promise.all([
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
-    readdir(previewRoot),
+    access(new URL("../public/og.png", import.meta.url)),
   ]);
 
-  assert.deepEqual(files.sort(), ["SkeletonPreview.tsx", "preview.css"]);
-  assert.match(preview, /from "react-loading-skeleton"/);
-  assert.match(preview, /baseColor="#eceae7"/);
-  assert.match(preview, /highlightColor="#f9f8f6"/);
-  assert.match(preview, /duration=\{2\.8\}/);
-  assert.match(preview, /sites-skeleton-search-placeholder/);
-  assert.match(packageJson, /"react-loading-skeleton": "3\.5\.0"/);
-
-  const shellIndex = preview.indexOf('className="sites-skeleton-shell"');
-  const statusIndex = preview.indexOf('className="sites-skeleton-status"');
-  assert.ok(shellIndex >= 0 && statusIndex > shellIndex);
-  assert.match(css, /position:\s*fixed/);
-  assert.match(css, /inset:\s*0/);
-  assert.match(css, /opacity:\s*0\.52/);
-  assert.match(css, /prefers-reduced-motion:\s*reduce/);
-  assert.doesNotMatch(css, /#020617|canvas|pets|progress/i);
-  assert.doesNotMatch(
-    preview,
-    /loading-spinner|status-mark|status-progress|canvas|cookie|random/i,
-  );
-
-  assert.match(page, /export const metadata:\s*Metadata/);
-  assert.match(page, /"codex-preview": "development"/);
-  assert.match(page, /<SkeletonPreview \/>/);
-  assert.match(layout, /title:\s*"Starter Project"/);
-  assert.doesNotMatch(layout, /codex-preview|_sites-preview|themeColor|\bViewport\b/);
-  assert.doesNotMatch(css, /(^|\s)(html|body)\s*\{/m);
-
-  await assert.rejects(
-    access(new URL("public/_sites-preview", templateRoot)),
-  );
+  assert.match(layout, /generateMetadata/);
+  assert.match(layout, /x-forwarded-host/);
+  assert.match(layout, /summary_large_image/);
+  assert.doesNotMatch(layout, /Starter Project|codex-preview/);
+  assert.doesNotMatch(packageJson, /react-loading-skeleton/);
+  await assert.rejects(access(new URL("../app/_sites-preview", projectRoot)));
 });
