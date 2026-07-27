@@ -43,6 +43,9 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     await ensureDocumentsSchema();
+    if (!request.headers.get("content-type")?.includes("multipart/form-data")) {
+      return Response.json({ error: "Upload files using multipart form data." }, { status: 400 });
+    }
     const formData = await request.formData();
     const files = formData
       .getAll("files")

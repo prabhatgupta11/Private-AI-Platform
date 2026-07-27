@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
+import { builtInReply, conversationText } from "../app/chat-assistant.js";
 
 const projectRoot = new URL("../", import.meta.url);
 
@@ -99,11 +100,33 @@ test("persists real document uploads in D1 and R2", async () => {
   assert.match(hosting, /"r2": "DOCUMENTS"/);
   assert.match(route, /env\.DOCUMENTS\.put/);
   assert.match(route, /\.insert\(documents\)/);
+  assert.match(route, /multipart\/form-data/);
   assert.match(route, /MAX_FILE_SIZE = 50 \* 1024 \* 1024/);
   assert.match(route, /files\.length > 20/);
   assert.match(schema, /sqliteTable\("documents"/);
   assert.match(db, /ensureDocumentsSchema/);
   assert.match(migration, /CREATE TABLE `documents`/);
+});
+
+test("provides a functional and honest built-in chat assistant", () => {
+  const greeting = builtInReply("hey", []);
+  const emptyDocuments = builtInReply("show my uploaded documents", []);
+  const documents = builtInReply("list my files", [
+    { name: "policy.pdf", size: 1200 },
+    { name: "handbook.docx", size: 2400 },
+  ]);
+  const model = builtInReply("which model is running?", []);
+  const transcript = conversationText([
+    { id: "1", role: "user", text: "hey" },
+    { id: "2", role: "assistant", text: greeting },
+  ]);
+
+  assert.match(greeting, /Hello!.*built-in PrivateAI platform assistant/);
+  assert.doesNotMatch(greeting, /No local language model is configured/);
+  assert.match(emptyDocuments, /not uploaded any documents/);
+  assert.match(documents, /2 uploaded documents.*policy\.pdf.*handbook\.docx/);
+  assert.match(model, /No generative model is connected yet/);
+  assert.match(transcript, /You: hey[\s\S]*PrivateAI: Hello!/);
 });
 
 test("ships branded metadata and no starter artifacts", async () => {

@@ -9,6 +9,7 @@ import {
   platformModules,
   workflowRows,
 } from "./platform-data";
+import { builtInReply, conversationText } from "./chat-assistant";
 
 type View = (typeof navItems)[number][0];
 
@@ -22,6 +23,13 @@ type DocumentRecord = {
   contentType: string;
   status: string;
   createdAt: string;
+};
+
+type AssistantMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  rating?: "good" | "bad";
 };
 
 function formatBytes(bytes: number) {
@@ -230,7 +238,7 @@ function Gateway() {
         eyebrow="PRIVATE AI GATEWAY"
         title="One secure gateway. Any local model."
         description="Keep client applications stable while administrators route, govern, and observe every private inference request."
-        action={<button className="btn btn-primary">+ Create route</button>}
+        action={<button className="btn btn-primary" disabled title="Connect a model before creating a route">+ Create route</button>}
       />
       <div className="metric-grid">
         <Metric label="Requests / second" value="0" detail="no traffic" />
@@ -326,7 +334,7 @@ function Knowledge({
 
   return (
     <>
-      <SectionHeader eyebrow="KNOWLEDGE MANAGEMENT" title="Your enterprise memory, governed." description="Start with a real document. File bytes are stored privately and metadata persists across sessions." action={<><button className="btn btn-secondary">Connect source</button><button className="btn btn-primary" onClick={() => setShowUpload(!showUpload)}>↑ Upload</button></>} />
+      <SectionHeader eyebrow="KNOWLEDGE MANAGEMENT" title="Your enterprise memory, governed." description="Start with a real document. File bytes are stored privately and metadata persists across sessions." action={<><button className="btn btn-secondary" disabled title="External connectors are not configured">Connect source</button><button className="btn btn-primary" onClick={() => setShowUpload(!showUpload)}>↑ Upload</button></>} />
       {(showUpload || documents.length === 0) && (
         <div
           className={`upload-zone ${uploading ? "uploading" : ""}`}
@@ -362,7 +370,7 @@ function Knowledge({
       <section className="panel">
         <div className="toolbar">
           <div className="search-field"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} aria-label="Search knowledge" placeholder="Search uploaded documents…" /></div>
-          <button className="filter-btn">All sources⌄</button><button className="filter-btn">All teams⌄</button><button className="filter-btn">Status⌄</button>
+          <button className="filter-btn" disabled>All sources</button><button className="filter-btn" disabled>All teams</button><button className="filter-btn" disabled>Status</button>
         </div>
         <div className="data-table knowledge-table">
           <div className="table-row table-head"><span>Name</span><span>Owner</span><span>Version</span><span>Status</span><span>Updated</span><span /></div>
@@ -375,15 +383,21 @@ function Knowledge({
   );
 }
 
-function SearchView() {
+function SearchView({ documents, navigate }: { documents: DocumentRecord[]; navigate: (view: View) => void }) {
   const [query, setQuery] = useState("");
+  const [submittedQuery, setSubmittedQuery] = useState("");
   const [saved, setSaved] = useState(false);
+  const results = useMemo(() => {
+    const term = submittedQuery.trim().toLowerCase();
+    return term ? documents.filter((document) => document.name.toLowerCase().includes(term)) : [];
+  }, [documents, submittedQuery]);
+  const search = () => setSubmittedQuery(query.trim());
   return (
     <>
-      <SectionHeader eyebrow="ENTERPRISE SEARCH" title="Find the answer, not just a file." description="Hybrid semantic and keyword retrieval across every authorized enterprise source." />
+      <SectionHeader eyebrow="DOCUMENT SEARCH" title="Find your uploaded files." description="Filename search works now. Content and semantic search will become available after an indexing pipeline is connected." />
       <div className="search-hero">
-        <div className="main-search"><span>⌕</span><input value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search all enterprise knowledge" /><kbd>⌘ K</kbd><button>Search</button></div>
-        <div className="search-options"><Tag tone="blue">Hybrid search</Tag><span>Scope: All knowledge</span><span>Sort: Relevance</span><button onClick={() => setSaved(!saved)}>{saved ? "★ Saved" : "☆ Save search"}</button></div>
+        <div className="main-search"><span>⌕</span><input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") search(); }} aria-label="Search uploaded document names" placeholder="Search document names…" /><kbd>⌘ K</kbd><button onClick={search}>Search</button></div>
+        <div className="search-options"><Tag tone="green">Filename search live</Tag><span>Scope: Uploaded documents</span><span>Sort: Newest first</span><button disabled={!submittedQuery} onClick={() => setSaved(!saved)}>{saved ? "★ Saved" : "☆ Save search"}</button></div>
       </div>
       <div className="search-layout">
         <aside className="filter-panel">
@@ -391,37 +405,106 @@ function SearchView() {
           {["Date range", "Department", "Source", "Author", "Tags", "File type"].map(f => <div className="filter-group" key={f}><b>{f}<span>⌄</span></b><small>No indexed values</small></div>)}
         </aside>
         <section className="results">
-          <div className="results-head"><span><b>0 results</b></span><span>Search indexing is not configured</span></div>
-          <EmptyState title={query ? "Search is not available yet" : "Your search results will appear here"} description={query ? "Your uploaded files are stored, but an embedding model and Qdrant index must be connected before semantic search can run." : "Upload documents, then configure the local embedding and vector-search pipeline."} />
+          <div className="results-head"><span><b>{results.length} result{results.length === 1 ? "" : "s"}</b></span><span>{submittedQuery ? `Filename match for “${submittedQuery}”` : "Enter a filename to search"}</span></div>
+          {results.map((document) => <article className="result-card" key={document.id}><span className="file-icon">{document.name.split(".").pop()?.slice(0, 3).toUpperCase() || "DOC"}</span><div><h3>{document.name}</h3><p>{formatBytes(document.size)} · {document.contentType}</p><small>Uploaded {formatDate(document.createdAt)}</small></div><button className="text-btn" onClick={() => navigate("knowledge")}>Open in Knowledge →</button></article>)}
+          {results.length === 0 && <EmptyState title={submittedQuery ? "No matching filenames" : "Search your uploaded documents"} description={submittedQuery ? "Try a different filename or upload the document first." : documents.length ? `There ${documents.length === 1 ? "is" : "are"} ${documents.length} uploaded document${documents.length === 1 ? "" : "s"} available to search.` : "Upload a document in Knowledge to create your first searchable filename."} action={!documents.length ? <button className="text-btn" onClick={() => navigate("knowledge")}>Upload document →</button> : undefined} />}
         </section>
       </div>
     </>
   );
 }
 
-function ChatView() {
+function ChatView({ documents, navigate, announce }: { documents: DocumentRecord[]; navigate: (view: View) => void; announce: (message: string) => void }) {
   const [message, setMessage] = useState("");
-  const [messages, setMessages] = useState<Array<{ role: string; text: string; sources?: string[] }>>([]);
-  const send = () => {
-    if (!message.trim()) return;
-    setMessages([...messages, { role: "user", text: message }, { role: "ai", text: "No local language model is configured. Install or connect a model before sending private AI requests." }]);
+  const [messages, setMessages] = useState<AssistantMessage[]>([]);
+  const [favorite, setFavorite] = useState(false);
+  const [historyReady, setHistoryReady] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      try {
+        const stored = window.localStorage.getItem("privateai-chat");
+        if (!cancelled && stored) setMessages(JSON.parse(stored) as AssistantMessage[]);
+      } catch {
+        // A blocked storage API should not prevent chat from working.
+      } finally {
+        if (!cancelled) setHistoryReady(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    if (!historyReady) return;
+    window.localStorage.setItem("privateai-chat", JSON.stringify(messages));
+  }, [historyReady, messages]);
+  const submit = (text = message) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const userMessage: AssistantMessage = { id: crypto.randomUUID(), role: "user", text: trimmed };
+    const assistantMessage: AssistantMessage = { id: crypto.randomUUID(), role: "assistant", text: builtInReply(trimmed, documents) };
+    setMessages((current) => [...current, userMessage, assistantMessage]);
     setMessage("");
+  };
+  const newConversation = () => {
+    setMessages([]);
+    setMessage("");
+    setFavorite(false);
+    announce("New conversation started");
+  };
+  const exportConversation = () => {
+    if (!messages.length) return;
+    const blob = new Blob([conversationText(messages)], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "privateai-conversation.txt";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    announce("Conversation exported");
+  };
+  const shareConversation = async () => {
+    if (!messages.length) return;
+    const text = conversationText(messages);
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: "PrivateAI conversation", text });
+        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+      }
+    }
+    const copied = await copyText(text);
+    announce(copied ? "Conversation copied for sharing" : "Unable to share conversation");
+  };
+  const rate = (id: string, rating: "good" | "bad") => {
+    setMessages((current) => current.map((item) => item.id === id ? { ...item, rating: item.rating === rating ? undefined : rating } : item));
+    announce(rating === "good" ? "Marked as helpful" : "Feedback recorded");
+  };
+  const regenerate = (index: number) => {
+    const prompt = [...messages].slice(0, index).reverse().find((item) => item.role === "user");
+    if (!prompt) return;
+    setMessages((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, text: builtInReply(prompt.text, documents), rating: undefined } : item));
+    announce("Response regenerated");
   };
   return (
     <div className="chat-shell">
       <aside className="threads-panel">
-        <button className="btn btn-primary new-chat">+ New conversation</button>
+        <button className="btn btn-primary new-chat" onClick={newConversation}>+ New conversation</button>
         <span className="kicker">TODAY</span>
-        <EmptyState compact title="No conversations" description="Your real thread history will appear here." />
+        {messages.length ? <div className="thread active"><span>●</span><b>{messages.find((item) => item.role === "user")?.text || "Platform assistant"}</b><small>{Math.ceil(messages.length / 2)}</small></div> : <EmptyState compact title="No conversations" description="Send a message to begin." />}
       </aside>
       <section className="chat-main">
-        <div className="chat-head"><div><h2>New conversation</h2><span>No model configured · 0 knowledge bases</span></div><div><button>☆</button><button>Share</button><button>Export</button><button>•••</button></div></div>
+        <div className="chat-head"><div><h2>Platform assistant</h2><span><Dot /> Built-in assistant · {documents.length} uploaded document{documents.length === 1 ? "" : "s"}</span></div><div><button aria-label={favorite ? "Remove favorite" : "Favorite conversation"} onClick={() => setFavorite(!favorite)}>{favorite ? "★" : "☆"}</button><button disabled={!messages.length} onClick={() => void shareConversation()}>Share</button><button disabled={!messages.length} onClick={exportConversation}>Export</button><button disabled={!messages.length} onClick={newConversation}>Clear</button></div></div>
         <div className="messages">
-          {messages.length === 0 && <EmptyState title="Start a private conversation" description="Chat will become available after a local model and knowledge index are configured." />}
-          {messages.map((m, i) => <div className={`message ${m.role}`} key={i}><div className="avatar">{m.role === "ai" ? "PA" : "PG"}</div><div><span className="message-author">{m.role === "ai" ? "PrivateAI" : "You"}</span><p>{m.text}</p>{m.sources && <div className="citations"><b>Sources</b>{m.sources.map((s, j) => <button key={s}><span>{j + 1}</span>{s}<em>↗</em></button>)}</div>}{m.role === "ai" && <div className="message-tools"><button>Copy</button><button>Good</button><button>Bad</button><button>Regenerate</button></div>}</div></div>)}
+          {messages.length === 0 && <div className="chat-welcome"><EmptyState title="How can I help?" description="Ask about uploads, your document status, available features, or how to configure PrivateAI." /><div className="prompt-chips">{["How do I upload a document?", "Show my uploaded documents", "What is working right now?"].map((prompt) => <button key={prompt} onClick={() => submit(prompt)}>{prompt}</button>)}</div></div>}
+          {messages.map((item, index) => <div className={`message ${item.role}`} key={item.id}><div className="avatar">{item.role === "assistant" ? "PA" : "PG"}</div><div><span className="message-author">{item.role === "assistant" ? "PrivateAI assistant" : "You"}</span><p>{item.text}</p>{item.role === "assistant" && <div className="message-tools"><button onClick={async () => announce(await copyText(item.text) ? "Response copied" : "Unable to copy response")}>Copy</button><button className={item.rating === "good" ? "active" : ""} onClick={() => rate(item.id, "good")}>Good</button><button className={item.rating === "bad" ? "active" : ""} onClick={() => rate(item.id, "bad")}>Bad</button><button onClick={() => regenerate(index)}>Regenerate</button></div>}</div></div>)}
         </div>
-        <div className="composer"><textarea aria-label="Message PrivateAI" placeholder="Ask anything across your private knowledge…" value={message} onChange={(e) => setMessage(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} /><div><span>＋ Attach</span><span>⌘ Knowledge: All</span><button onClick={send}>↑</button></div></div>
-        <small className="chat-disclaimer">Responses are generated locally and may require verification. Sources remain within your infrastructure.</small>
+        <div className="composer"><textarea aria-label="Message PrivateAI" placeholder="Ask about setup or your uploaded documents…" value={message} onChange={(e) => setMessage(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }} /><div><button className="composer-link" onClick={() => navigate("knowledge")}>＋ Upload document</button><span>Knowledge: {documents.length} file{documents.length === 1 ? "" : "s"}</span><button aria-label="Send message" disabled={!message.trim()} onClick={() => submit()}>↑</button></div></div>
+        <small className="chat-disclaimer">Built-in operational guidance only. Connect a local model and index for generative answers from document contents.</small>
       </section>
     </div>
   );
@@ -430,14 +513,14 @@ function ChatView() {
 function Agents() {
   return (
     <>
-      <SectionHeader eyebrow="AI AGENTS" title="Deploy specialists, not shadow AI." description="Purpose-built agents inherit user permissions, approved tools, knowledge scopes, and complete auditability." action={<button className="btn btn-primary">+ Build agent</button>} />
+      <SectionHeader eyebrow="AI AGENTS" title="Deploy specialists, not shadow AI." description="Purpose-built agents inherit user permissions, approved tools, knowledge scopes, and complete auditability." action={<button className="btn btn-primary" disabled title="Install a model before building agents">+ Build agent</button>} />
       <div className="agent-hero panel">
-        <div><Tag tone="blue">LANGGRAPH ORCHESTRATION</Tag><h2>Agents that reason inside your boundaries.</h2><p>Every tool call, retrieval, model decision, and human approval is observable and governed by policy.</p><div className="hero-actions"><button className="btn btn-primary">Open agent studio</button><button className="btn btn-secondary">Browse templates</button></div></div>
+        <div><Tag tone="blue">LANGGRAPH ORCHESTRATION</Tag><h2>Agents that reason inside your boundaries.</h2><p>Every tool call, retrieval, model decision, and human approval is observable and governed by policy.</p><div className="hero-actions"><button className="btn btn-primary" disabled>Open agent studio</button><button className="btn btn-secondary" disabled>Browse templates</button></div></div>
         <div className="agent-flow"><div className="agent-core">AGENT<small>Plan · Reason · Act</small></div><span className="orbit one">Knowledge</span><span className="orbit two">Tools</span><span className="orbit three">Approvals</span><span className="orbit four">Memory</span></div>
       </div>
       <section className="panel">
         <div className="panel-head"><div><span className="kicker">DEPLOYED AGENTS</span><h2>Agent fleet</h2></div><div className="search-field compact"><span>⌕</span><input placeholder="Find agent…" /></div></div>
-        <div className="data-table agent-table"><div className="table-row table-head"><span>Agent</span><span>Purpose</span><span>Runs / 30d</span><span>Success</span><span>Status</span><span /></div>{agentRows.map((a) => <div className="table-row" key={a[0]}><span className="doc-name"><i>AI</i><b>{a[0]}<small>Qwen3 32B · RAG enabled</small></b></span><span>{a[1]}</span><span>{a[2]}</span><span>{a[3]}</span><span><Tag tone={a[4] === "Active" ? "green" : "amber"}>{a[4]}</Tag></span><button>•••</button></div>)}</div>
+        <div className="data-table agent-table"><div className="table-row table-head"><span>Agent</span><span>Purpose</span><span>Runs / 30d</span><span>Success</span><span>Status</span><span /></div>{agentRows.map((a) => <div className="table-row" key={a[0]}><span className="doc-name"><i>AI</i><b>{a[0]}<small>Qwen3 32B · RAG enabled</small></b></span><span>{a[1]}</span><span>{a[2]}</span><span>{a[3]}</span><span><Tag tone={a[4] === "Active" ? "green" : "amber"}>{a[4]}</Tag></span><button disabled>•••</button></div>)}</div>
         <EmptyState title="No agents deployed" description="Install a local model and create an agent when you are ready." />
       </section>
     </>
@@ -447,15 +530,15 @@ function Agents() {
 function Workflows() {
   return (
     <>
-      <SectionHeader eyebrow="WORKFLOW AUTOMATION" title="Turn intelligence into governed action." description="Compose AI, enterprise systems, and human approvals into reliable private workflows." action={<button className="btn btn-primary">+ New workflow</button>} />
+      <SectionHeader eyebrow="WORKFLOW AUTOMATION" title="Turn intelligence into governed action." description="Compose AI, enterprise systems, and human approvals into reliable private workflows." action={<button className="btn btn-primary" disabled title="Workflow services are not configured">+ New workflow</button>} />
       <div className="metric-grid"><Metric label="Workflow runs" value="0" detail="no runs" /><Metric label="Hours saved" value="0" detail="not measured" /><Metric label="Success rate" value="—" detail="no completed runs" /><Metric label="Awaiting approval" value="0" detail="no human tasks" /></div>
       <section className="panel workflow-builder">
         <div className="panel-head"><div><span className="kicker">VISUAL ORCHESTRATION</span><h2>Workflow canvas</h2></div></div>
         <EmptyState title="No workflow selected" description="Create your first workflow to begin adding triggers, AI steps, and approvals." />
       </section>
       <section className="panel">
-        <div className="panel-head"><div><span className="kicker">AUTOMATIONS</span><h2>Production workflows</h2></div><button className="filter-btn">All status⌄</button></div>
-        <div className="data-table workflow-table"><div className="table-row table-head"><span>Workflow</span><span>Scope</span><span>Trigger</span><span>Decision</span><span>Status</span><span /></div>{workflowRows.map(w => <div className="table-row" key={w[0]}><span><b>{w[0]}</b></span><span>{w[1]}</span><span>{w[2]}</span><span>{w[3]}</span><span><Tag tone={w[4] === "Running" ? "green" : "amber"}>{w[4]}</Tag></span><button>•••</button></div>)}</div>
+        <div className="panel-head"><div><span className="kicker">AUTOMATIONS</span><h2>Production workflows</h2></div><button className="filter-btn" disabled>All status</button></div>
+        <div className="data-table workflow-table"><div className="table-row table-head"><span>Workflow</span><span>Scope</span><span>Trigger</span><span>Decision</span><span>Status</span><span /></div>{workflowRows.map(w => <div className="table-row" key={w[0]}><span><b>{w[0]}</b></span><span>{w[1]}</span><span>{w[2]}</span><span>{w[3]}</span><span><Tag tone={w[4] === "Running" ? "green" : "amber"}>{w[4]}</Tag></span><button disabled>•••</button></div>)}</div>
         <EmptyState title="No workflows created" description="Published automations will appear here." />
       </section>
     </>
@@ -466,12 +549,12 @@ function Models() {
   const [active, setActive] = useState("");
   return (
     <>
-      <SectionHeader eyebrow="MODELS & COMPUTE" title="Your models. Your GPUs. Your control." description="Install, benchmark, tune, route, version, and roll back every locally served model." action={<><button className="btn btn-secondary">Run benchmark</button><button className="btn btn-primary">+ Install model</button></>} />
+      <SectionHeader eyebrow="MODELS & COMPUTE" title="Your models. Your GPUs. Your control." description="Install, benchmark, tune, route, version, and roll back every locally served model." action={<><button className="btn btn-secondary" disabled>Run benchmark</button><button className="btn btn-primary" disabled>+ Install model</button></>} />
       <div className="metric-grid"><Metric label="Models installed" value="0" detail="none installed" /><Metric label="GPU utilization" value="—" detail="no cluster connected" /><Metric label="Tokens / second" value="0" detail="no inference" /><Metric label="Fine-tuning jobs" value="0" detail="none running" /></div>
       <section className="panel">
         <div className="panel-head"><div><span className="kicker">MODEL REGISTRY</span><h2>Serving models</h2></div><div className="search-field compact"><span>⌕</span><input placeholder="Search models…" /></div></div>
         <div className="model-list">
-          {modelRows.map(m => <article className={`model-row ${active === m.name ? "selected" : ""}`} key={m.name} onClick={() => setActive(m.name)}><div className="model-mark">{m.name.slice(0, 1)}</div><div className="model-info"><h3>{m.name}</h3><p>{m.role}</p><div><Tag tone={m.status === "Serving" ? "green" : "amber"}><Dot /> {m.status}</Tag><span>{m.gpu}</span><span>{m.context} context</span></div></div><div className="model-load"><span><b>{m.load}%</b> GPU</span><div className="bar"><i style={{ width: `${m.load}%` }} /></div></div><div className="model-latency"><b>{m.latency}</b><span>P95 latency</span></div><button aria-label={`More options for ${m.name}`}>•••</button></article>)}
+          {modelRows.map(m => <article className={`model-row ${active === m.name ? "selected" : ""}`} key={m.name} onClick={() => setActive(m.name)}><div className="model-mark">{m.name.slice(0, 1)}</div><div className="model-info"><h3>{m.name}</h3><p>{m.role}</p><div><Tag tone={m.status === "Serving" ? "green" : "amber"}><Dot /> {m.status}</Tag><span>{m.gpu}</span><span>{m.context} context</span></div></div><div className="model-load"><span><b>{m.load}%</b> GPU</span><div className="bar"><i style={{ width: `${m.load}%` }} /></div></div><div className="model-latency"><b>{m.latency}</b><span>P95 latency</span></div><button aria-label={`More options for ${m.name}`} disabled>•••</button></article>)}
         </div>
         <EmptyState title="No models installed" description="Install Qwen, Llama, Mistral, DeepSeek, Gemma, Phi, or a custom local model." />
       </section>
@@ -486,9 +569,9 @@ function Models() {
 function Integrations() {
   return (
     <>
-      <SectionHeader eyebrow="INTEGRATIONS" title="Connect knowledge where it already lives." description="Secure, incremental connectors preserve source permissions and keep private indexes fresh." action={<button className="btn btn-primary">+ Add integration</button>} />
+      <SectionHeader eyebrow="INTEGRATIONS" title="Connect knowledge where it already lives." description="Secure, incremental connectors preserve source permissions and keep private indexes fresh." action={<button className="btn btn-primary" disabled title="Connector backends are not configured">+ Add integration</button>} />
       <div className="integration-stats"><span>0 connected</span><span>0 syncing</span><span>No synchronization has run</span><button disabled>Sync all</button></div>
-      <div className="connector-grid">{connectors.map((c, i) => <article className="connector-card" key={c[0]}><div className={`connector-logo logo-${i}`}>{c[0].slice(0, 2).toUpperCase()}</div><div><h3>{c[0]}</h3><p>{c[1]}</p></div><Tag tone={c[2] === "Connected" ? "green" : c[2] === "Syncing" ? "blue" : "neutral"}>{c[2]}</Tag><div className="connector-foot"><span>{c[3]}</span><button>{c[2] === "Available" ? "Connect" : "Manage"}</button></div></article>)}</div>
+      <div className="connector-grid">{connectors.map((c, i) => <article className="connector-card" key={c[0]}><div className={`connector-logo logo-${i}`}>{c[0].slice(0, 2).toUpperCase()}</div><div><h3>{c[0]}</h3><p>{c[1]}</p></div><Tag tone={c[2] === "Connected" ? "green" : c[2] === "Syncing" ? "blue" : "neutral"}>{c[2]}</Tag><div className="connector-foot"><span>{c[3]}</span><button disabled title="Connector backend not configured">Connect</button></div></article>)}</div>
       <section className="panel sync-panel"><div><span className="kicker">CONNECTOR FRAMEWORK</span><h2>Built for continuous, permission-aware sync</h2><p>Delta indexing, retry queues, source ACL mirroring, webhook ingestion, and complete sync observability are included.</p></div><div className="sync-features">{["Incremental updates", "Delta indexing", "Permission sync", "Retry mechanism", "Dead-letter queue", "Audit logging"].map(f => <Tag tone="blue" key={f}>✓ {f}</Tag>)}</div></section>
     </>
   );
@@ -504,9 +587,9 @@ function Developers() {
   };
   return (
     <>
-      <SectionHeader eyebrow="DEVELOPER PLATFORM" title="Start with the live document API." description="Document upload, listing, and deletion are available now. Inference, search, agents, and workflows remain on the platform roadmap." action={<button className="btn btn-secondary">API reference ↗</button>} />
+      <SectionHeader eyebrow="DEVELOPER PLATFORM" title="Start with the live document API." description="Document upload, listing, and deletion are available now. Inference, search, agents, and workflows remain on the platform roadmap." action={<button className="btn btn-secondary" disabled>API reference coming soon</button>} />
       <div className="dev-layout">
-        <section className="panel endpoint-list"><span className="kicker">API ENDPOINTS</span>{["/api/documents", "/v1/chat/completions", "/v1/embeddings", "/v1/search", "/v1/workflows", "/v1/agents", "/v1/models"].map((e, i) => <button className={i === 0 ? "active" : ""} disabled={i > 0} key={e}><Tag tone={i === 0 ? "green" : "neutral"}>{i === 0 ? "LIVE" : "PLANNED"}</Tag><code>{e}</code><span>›</span></button>)}</section>
+        <section className="panel endpoint-list"><span className="kicker">API ENDPOINTS</span>{["/api/documents", "/v1/chat/completions", "/v1/embeddings", "/v1/search", "/v1/workflows", "/v1/agents", "/v1/models"].map((e, i) => <button className={i === 0 ? "active" : ""} disabled={i > 0} onClick={() => setLang("curl")} key={e}><Tag tone={i === 0 ? "green" : "neutral"}>{i === 0 ? "LIVE" : "PLANNED"}</Tag><code>{e}</code><span>›</span></button>)}</section>
         <section className="code-panel"><div className="code-tabs">{["curl", "python", "node"].map(l => <button className={lang === l ? "active" : ""} onClick={() => setLang(l)} key={l}>{l === "node" ? "Node.js" : l[0].toUpperCase() + l.slice(1)}</button>)}<button className="copy-code" onClick={async () => {
           const success = await copyText(code[lang]);
           setCopied(success);
@@ -521,7 +604,7 @@ function Developers() {
 function Analytics() {
   return (
     <>
-      <SectionHeader eyebrow="ANALYTICS & OBSERVABILITY" title="Know exactly how private AI performs." description="One view across adoption, answer quality, inference, retrieval, infrastructure, agents, and risk." action={<button className="filter-btn">Last 30 days⌄</button>} />
+      <SectionHeader eyebrow="ANALYTICS & OBSERVABILITY" title="Know exactly how private AI performs." description="One view across adoption, answer quality, inference, retrieval, infrastructure, agents, and risk." action={<button className="filter-btn" disabled>Last 30 days</button>} />
       <div className="metric-grid"><Metric label="Active users" value="0" detail="no identity provider" /><Metric label="Total queries" value="0" detail="no AI traffic" /><Metric label="Search success" value="—" detail="no searches" /><Metric label="Error rate" value="—" detail="no requests" /></div>
       <div className="analytics-grid">
         <section className="panel chart-panel"><div className="panel-head"><div><span className="kicker">REQUEST VOLUME</span><h2>Queries & agent runs</h2></div></div><EmptyState title="No request data" description="Analytics will begin after the first real AI request." /></section>
@@ -539,8 +622,8 @@ function Security() {
   const [maintenance, setMaintenance] = useState(false);
   return (
     <>
-      <SectionHeader eyebrow="SECURITY & ADMINISTRATION" title="Private by architecture. Governed by design." description="Identity, encryption, policy, auditing, compliance, and platform administration in one control plane." action={<button className="btn btn-primary">Review security posture</button>} />
-      <div className="posture-banner"><div className="posture-score">—<span>/100</span></div><div><Tag>NOT ASSESSED</Tag><h2>Security setup has not started</h2><p>Configure identity, encryption, file controls, and auditing before evaluating posture.</p></div><button className="btn btn-secondary">Start configuration</button></div>
+      <SectionHeader eyebrow="SECURITY & ADMINISTRATION" title="Private by architecture. Governed by design." description="Identity, encryption, policy, auditing, compliance, and platform administration in one control plane." action={<button className="btn btn-primary" disabled>Review security posture</button>} />
+      <div className="posture-banner"><div className="posture-score">—<span>/100</span></div><div><Tag>NOT ASSESSED</Tag><h2>Security setup has not started</h2><p>Configure identity, encryption, file controls, and auditing before evaluating posture.</p></div><button className="btn btn-secondary" disabled>Start configuration</button></div>
       <div className="security-grid">
         {[
           ["Identity & Access", "SSO, LDAP, MFA, RBAC", "Not configured", 0],
@@ -549,10 +632,10 @@ function Security() {
           ["File Security", "Malware, validation, watermark", "Not configured", 0],
           ["Compliance", "SOC 2, GDPR, ISO 27001", "Not assessed", 0],
           ["Audit & Sessions", "Devices, sessions, immutable logs", "Not configured", 0],
-        ].map(s => <article className="security-card" key={s[0]}><div className="security-icon">◈</div><div><h3>{s[0]}</h3><p>{s[1]}</p></div><span>{s[2]}</span><div className="bar"><i style={{ width: `${s[3]}%` }} /></div><button>Configure →</button></article>)}
+        ].map(s => <article className="security-card" key={s[0]}><div className="security-icon">◈</div><div><h3>{s[0]}</h3><p>{s[1]}</p></div><span>{s[2]}</span><div className="bar"><i style={{ width: `${s[3]}%` }} /></div><button disabled>Configure →</button></article>)}
       </div>
       <div className="two-col">
-        <section className="panel"><div className="panel-head"><div><span className="kicker">RECENT AUDIT EVENTS</span><h2>Immutable activity log</h2></div><button className="text-btn">Open audit log →</button></div><EmptyState compact title="No audit events" description="Administrative actions will appear after audit logging is configured." /></section>
+        <section className="panel"><div className="panel-head"><div><span className="kicker">RECENT AUDIT EVENTS</span><h2>Immutable activity log</h2></div><button className="text-btn" disabled>Open audit log →</button></div><EmptyState compact title="No audit events" description="Administrative actions will appear after audit logging is configured." /></section>
         <section className="panel admin-settings"><div className="panel-head"><div><span className="kicker">SYSTEM ADMINISTRATION</span><h2>Platform controls</h2></div></div>{[["SMTP", "No mail server", false], ["Automated backups", "No schedule", false], ["License", "No license installed", false]].map(x => <div key={x[0]}><span><b>{x[0]}</b><small>{x[1]}</small></span><Tag>Not configured</Tag></div>)}<div><span><b>Maintenance mode</b><small>Restrict access to administrators</small></span><button className={`toggle ${maintenance ? "on" : ""}`} aria-label="Toggle maintenance mode" aria-pressed={maintenance} onClick={() => setMaintenance(!maintenance)}><span /></button></div></section>
       </div>
     </>
@@ -562,7 +645,7 @@ function Security() {
 function Infrastructure() {
   return (
     <>
-      <SectionHeader eyebrow="AI INFRASTRUCTURE" title="The private inference fabric." description="Schedule, balance, queue, cache, stream, and observe AI workloads across multi-node GPU clusters." action={<><button className="btn btn-secondary">Open Grafana ↗</button><button className="btn btn-primary">+ Add node</button></>} />
+      <SectionHeader eyebrow="AI INFRASTRUCTURE" title="The private inference fabric." description="Schedule, balance, queue, cache, stream, and observe AI workloads across multi-node GPU clusters." action={<><button className="btn btn-secondary" disabled>Open Grafana</button><button className="btn btn-primary" disabled>+ Add node</button></>} />
       <div className="cluster-banner"><div><span className="cluster-pulse"><i /><i /><i /></span><div><Tag>NOT CONNECTED</Tag><h2>No compute cluster</h2><p>Add a node or connect an existing Kubernetes environment.</p></div></div><div className="cluster-summary"><span><b>0</b> Nodes</span><span><b>0</b> GPUs</span><span><b>0 GB</b> VRAM</span><span><b>—</b> Uptime</span></div></div>
       <section className="panel"><EmptyState title="Infrastructure services are not running" description="LLM serving, embeddings, scheduling, load balancing, queues, caching, and streaming will appear after a cluster is connected." /></section>
       <section className="panel deployment-panel"><div><span className="kicker">DEPLOY ANYWHERE</span><h2>One platform, every enterprise environment.</h2><p>Docker, Kubernetes, Helm, cloud VPC, VMware, bare metal, and fully air-gapped deployment packages.</p></div><div className="deployment-tags">{["Docker", "Kubernetes", "Helm", "AWS", "Azure", "GCP", "VMware", "Bare metal", "Air-gapped"].map(d => <Tag key={d}>{d}</Tag>)}</div></section>
@@ -577,8 +660,8 @@ function Modules() {
   return (
     <>
       <SectionHeader eyebrow="PLATFORM ROADMAP" title="Every module. Every capability." description={`${platformModules.length} planned modules and ${featureCount} specified capabilities. This catalog describes the product roadmap; it does not claim that every backend is configured.`} />
-      <div className="module-toolbar"><div className="search-field"><span>⌕</span><input value={term} onChange={e => setTerm(e.target.value)} aria-label="Search modules and features" placeholder="Find any module or capability…" /></div><Tag tone="green">{filtered.length} modules shown</Tag></div>
-      <div className="module-grid">{filtered.map(m => <article className="module-card" key={m.id}><div className="module-number">{m.number}</div><div className="module-title"><h2>{m.name}</h2><Tag>{m.features.length} specified</Tag></div><p>{m.description}</p><div className="feature-cloud">{m.features.map(f => <span key={f}>{f}<i>PRD</i></span>)}</div><button>View roadmap <span>→</span></button></article>)}</div>
+      <div className="module-toolbar"><div className="search-field"><span>⌕</span><input value={term} onChange={e => setTerm(e.target.value)} aria-label="Search modules and features" placeholder="Find any module or capability…" /></div><Tag tone="green">{filtered.length} module{filtered.length === 1 ? "" : "s"} shown</Tag></div>
+      <div className="module-grid">{filtered.map(m => <article className="module-card" key={m.id}><div className="module-number">{m.number}</div><div className="module-title"><h2>{m.name}</h2><Tag>{m.features.length} specified</Tag></div><p>{m.description}</p><div className="feature-cloud">{m.features.map(f => <span key={f}>{f}<i>PRD</i></span>)}</div><button disabled>Roadmap item <span>→</span></button></article>)}</div>
     </>
   );
 }
@@ -590,6 +673,7 @@ function AppContent({
   documentsLoading,
   documentsError,
   reloadDocuments,
+  announce,
 }: {
   view: View;
   navigate: (view: View) => void;
@@ -597,12 +681,13 @@ function AppContent({
   documentsLoading: boolean;
   documentsError: string;
   reloadDocuments: () => Promise<void>;
+  announce: (message: string) => void;
 }) {
   switch (view) {
     case "gateway": return <Gateway />;
     case "knowledge": return <Knowledge documents={documents} loading={documentsLoading} loadError={documentsError} reloadDocuments={reloadDocuments} />;
-    case "search": return <SearchView />;
-    case "chat": return <ChatView />;
+    case "search": return <SearchView documents={documents} navigate={navigate} />;
+    case "chat": return <ChatView documents={documents} navigate={navigate} announce={announce} />;
     case "agents": return <Agents />;
     case "workflows": return <Workflows />;
     case "models": return <Models />;
@@ -674,7 +759,7 @@ export default function Home() {
           <span className="brand-mark"><i /><i /><i /></span>
           <span><b>PrivateAI</b><small>PLATFORM</small></span>
         </div>
-        <div className="environment"><span><Dot /> Production</span><button aria-label="Switch environment">⌄</button></div>
+        <div className="environment"><span><Dot /> Production</span><button aria-label="Switch environment" disabled title="Only one environment is configured">⌄</button></div>
         <nav aria-label="Platform navigation">
           <span className="nav-label">CONTROL PLANE</span>
           {navItems.slice(0, 10).map(([id, label, icon]) => <button key={id} className={view === id ? "active" : ""} onClick={() => navigate(id)}><span className="nav-icon">{icon}</span><span>{label}</span></button>)}
@@ -699,7 +784,7 @@ export default function Home() {
           </div>
         </header>
         <main className={view === "chat" ? "content content-chat" : "content"}>
-          <AppContent view={view} navigate={navigate} documents={documents} documentsLoading={documentsLoading} documentsError={documentsError} reloadDocuments={reloadDocuments} />
+          <AppContent view={view} navigate={navigate} documents={documents} documentsLoading={documentsLoading} documentsError={documentsError} reloadDocuments={reloadDocuments} announce={announce} />
         </main>
       </div>
       {notice && <div className="toast"><Dot /> {notice}</div>}

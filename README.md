@@ -25,6 +25,12 @@ documents. Files may be up to 50 MB each, with a maximum of 20 per request.
 Uploaded documents remain available after refresh and can be deleted from the
 document table.
 
+Select **AI Chat** to use the built-in platform assistant for setup help and
+document-status questions. Conversation history is stored on the current
+device. This assistant does not pretend to be a generative model: answering
+questions from document contents still requires a local model and indexing
+pipeline.
+
 ## Document API
 
 Upload:
