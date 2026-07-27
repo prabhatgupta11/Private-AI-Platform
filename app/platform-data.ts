@@ -173,35 +173,27 @@ export const navItems = [
   ["modules", "All modules", "20"],
 ] as const;
 
-export const modelRows = [
-  { name: "Qwen3 32B", role: "Complex reasoning", status: "Serving", gpu: "2 × H100", load: 68, latency: "1.8s", context: "128K" },
-  { name: "Qwen3 8B", role: "Fast Q&A", status: "Serving", gpu: "1 × L40S", load: 43, latency: "620ms", context: "32K" },
-  { name: "Mistral Small 3.1", role: "Document extraction", status: "Warm", gpu: "1 × A100", load: 12, latency: "910ms", context: "128K" },
-  { name: "Qwen3 Embedding", role: "Semantic indexing", status: "Serving", gpu: "1 × L4", load: 51, latency: "84ms", context: "8K" },
-];
+export const modelRows: Array<{
+  name: string;
+  role: string;
+  status: string;
+  gpu: string;
+  load: number;
+  latency: string;
+  context: string;
+}> = [];
 
 export const connectors = [
-  ["Slack", "Collaboration", "Connected", "2.4M messages"],
-  ["GitHub", "Code", "Connected", "186 repositories"],
-  ["Jira", "Projects", "Connected", "42 projects"],
-  ["Notion", "Knowledge", "Syncing", "12,084 pages"],
-  ["SharePoint", "Files", "Connected", "6.8 TB indexed"],
-  ["PostgreSQL", "Database", "Connected", "18 schemas"],
-  ["Salesforce", "CRM", "Available", "OAuth connector"],
-  ["ServiceNow", "Operations", "Available", "Bi-directional"],
+  ["Slack", "Collaboration", "Available", "Not connected"],
+  ["GitHub", "Code", "Available", "Not connected"],
+  ["Jira", "Projects", "Available", "Not connected"],
+  ["Notion", "Knowledge", "Available", "Not connected"],
+  ["SharePoint", "Files", "Available", "Not connected"],
+  ["PostgreSQL", "Database", "Available", "Not connected"],
+  ["Salesforce", "CRM", "Available", "Not connected"],
+  ["ServiceNow", "Operations", "Available", "Not connected"],
 ];
 
-export const agentRows = [
-  ["Research Agent", "Knowledge synthesis", "12.8K", "97.4%", "Active"],
-  ["Legal Agent", "Contract review", "4.2K", "98.1%", "Active"],
-  ["Engineering Agent", "Code & incident analysis", "8.9K", "95.8%", "Active"],
-  ["SQL Agent", "Governed data queries", "6.1K", "99.2%", "Active"],
-  ["HR Agent", "Policy & employee support", "3.7K", "96.9%", "Draft"],
-];
+export const agentRows: string[][] = [];
 
-export const workflowRows = [
-  ["Document approval", "Legal workspace", "When contract is uploaded", "Human approval", "Running"],
-  ["Incident root cause", "Engineering", "P1 incident created", "DevOps agent", "Running"],
-  ["Weekly executive report", "Leadership", "Friday · 16:00", "Report agent", "Running"],
-  ["Compliance risk detection", "Global", "New document indexed", "Legal agent", "Paused"],
-];
+export const workflowRows: string[][] = [];

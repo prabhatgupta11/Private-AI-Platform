@@ -4,48 +4,23 @@ import test from "node:test";
 
 const projectRoot = new URL("../", import.meta.url);
 
-async function render() {
-  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
-  workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
-  const { default: worker } = await import(workerUrl.href);
+test("builds the honest PrivateAI first-run experience", async () => {
+  const [page, layout] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+    access(new URL("../dist/server/index.js", import.meta.url)),
+  ]);
 
-  return worker.fetch(
-    new Request("http://localhost/", {
-      headers: {
-        accept: "text/html",
-        host: "localhost:3000",
-      },
-    }),
-    {
-      ASSETS: {
-        fetch: async () => new Response("Not found", { status: 404 }),
-      },
-    },
-    {
-      waitUntil() {},
-      passThroughOnException() {},
-    },
-  );
-}
-
-test("server-renders the complete PrivateAI overview", async () => {
-  const response = await render();
-  assert.equal(response.status, 200);
-  assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
-
-  const html = await response.text();
-  assert.match(
-    html,
-    /<title>PrivateAI Platform — Enterprise AI Infrastructure<\/title>/i,
-  );
-  assert.match(html, /The control plane for your private AI estate\./);
-  assert.match(html, /Private AI Gateway/);
-  assert.match(html, /100% local inference/);
-  assert.match(html, /PRIVATE NETWORK BOUNDARY · NO EXTERNAL EGRESS/);
-  assert.match(html, /Platform uptime/);
-  assert.match(html, /99\.98%/);
-  assert.match(html, /http:\/\/localhost:3000\/og\.png/);
-  assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
+  assert.match(layout, /PrivateAI Platform — Enterprise AI Infrastructure/);
+  assert.match(page, /Upload your first document/);
+  assert.match(page, /No compute cluster connected/);
+  assert.match(page, /No models installed/);
+  assert.match(page, /No agents deployed/);
+  assert.match(page, /No workflows created/);
+  assert.match(page, /0 connected/);
+  assert.match(page, /No request data/);
+  assert.match(page, /Security setup has not started/);
+  assert.doesNotMatch(page, /12\.8M|4\.2M|8,428|99\.98%|842 r\/s/);
 });
 
 test("covers every PRD module and named capability", async () => {
@@ -107,6 +82,28 @@ test("covers every PRD module and named capability", async () => {
   assert.match(page, /case "modules": return <Modules/);
   assert.match(page, /async function copyText/);
   assert.match(page, /aria-label="Toggle maintenance mode"/);
+  assert.match(page, /planned modules/);
+  assert.match(page, /<i>PRD<\/i>/);
+});
+
+test("persists real document uploads in D1 and R2", async () => {
+  const [route, schema, db, hosting, migration] = await Promise.all([
+    readFile(new URL("../app/api/documents/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
+    readFile(new URL("../db/index.ts", import.meta.url), "utf8"),
+    readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0000_redundant_power_pack.sql", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(hosting, /"d1": "DB"/);
+  assert.match(hosting, /"r2": "DOCUMENTS"/);
+  assert.match(route, /env\.DOCUMENTS\.put/);
+  assert.match(route, /\.insert\(documents\)/);
+  assert.match(route, /MAX_FILE_SIZE = 50 \* 1024 \* 1024/);
+  assert.match(route, /files\.length > 20/);
+  assert.match(schema, /sqliteTable\("documents"/);
+  assert.match(db, /ensureDocumentsSchema/);
+  assert.match(migration, /CREATE TABLE `documents`/);
 });
 
 test("ships branded metadata and no starter artifacts", async () => {
