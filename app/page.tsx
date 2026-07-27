@@ -9,7 +9,7 @@ import {
   platformModules,
   workflowRows,
 } from "./platform-data";
-import { builtInReply, conversationText } from "./chat-assistant";
+import { builtInReply, conversationText, shouldUseBuiltInAssistant } from "./chat-assistant";
 
 type View = (typeof navItems)[number][0];
 
@@ -30,6 +30,7 @@ type AssistantMessage = {
   role: "user" | "assistant";
   text: string;
   rating?: "good" | "bad";
+  sources?: string[];
 };
 
 function formatBytes(bytes: number) {
@@ -419,6 +420,7 @@ function ChatView({ documents, navigate, announce }: { documents: DocumentRecord
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
   const [favorite, setFavorite] = useState(false);
   const [historyReady, setHistoryReady] = useState(false);
+  const [replying, setReplying] = useState(false);
   useEffect(() => {
     let cancelled = false;
     Promise.resolve().then(() => {
@@ -439,13 +441,47 @@ function ChatView({ documents, navigate, announce }: { documents: DocumentRecord
     if (!historyReady) return;
     window.localStorage.setItem("privateai-chat", JSON.stringify(messages));
   }, [historyReady, messages]);
-  const submit = (text = message) => {
+  const answerQuestion = async (question: string) => {
+    if (shouldUseBuiltInAssistant(question)) {
+      return { text: builtInReply(question, documents), sources: [] };
+    }
+
+    const response = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+    });
+    const payload = await response.json() as { answer?: string; sources?: string[]; error?: string };
+    if (!response.ok) throw new Error(payload.error || "Unable to search your documents.");
+    return {
+      text: payload.answer || "I could not find an answer in the uploaded documents.",
+      sources: payload.sources ?? [],
+    };
+  };
+  const submit = async (text = message) => {
     const trimmed = text.trim();
-    if (!trimmed) return;
+    if (!trimmed || replying) return;
     const userMessage: AssistantMessage = { id: crypto.randomUUID(), role: "user", text: trimmed };
-    const assistantMessage: AssistantMessage = { id: crypto.randomUUID(), role: "assistant", text: builtInReply(trimmed, documents) };
-    setMessages((current) => [...current, userMessage, assistantMessage]);
+    setMessages((current) => [...current, userMessage]);
     setMessage("");
+    setReplying(true);
+    try {
+      const result = await answerQuestion(trimmed);
+      setMessages((current) => [...current, {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        text: result.text,
+        sources: result.sources,
+      }]);
+    } catch (error) {
+      setMessages((current) => [...current, {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        text: error instanceof Error ? `I could not search the documents: ${error.message}` : "I could not search the documents.",
+      }]);
+    } finally {
+      setReplying(false);
+    }
   };
   const newConversation = () => {
     setMessages([]);
@@ -484,11 +520,24 @@ function ChatView({ documents, navigate, announce }: { documents: DocumentRecord
     setMessages((current) => current.map((item) => item.id === id ? { ...item, rating: item.rating === rating ? undefined : rating } : item));
     announce(rating === "good" ? "Marked as helpful" : "Feedback recorded");
   };
-  const regenerate = (index: number) => {
+  const regenerate = async (index: number) => {
     const prompt = [...messages].slice(0, index).reverse().find((item) => item.role === "user");
-    if (!prompt) return;
-    setMessages((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, text: builtInReply(prompt.text, documents), rating: undefined } : item));
-    announce("Response regenerated");
+    if (!prompt || replying) return;
+    setReplying(true);
+    try {
+      const result = await answerQuestion(prompt.text);
+      setMessages((current) => current.map((item, itemIndex) => itemIndex === index ? {
+        ...item,
+        text: result.text,
+        sources: result.sources,
+        rating: undefined,
+      } : item));
+      announce("Response regenerated");
+    } catch (error) {
+      announce(error instanceof Error ? error.message : "Unable to regenerate response");
+    } finally {
+      setReplying(false);
+    }
   };
   return (
     <div className="chat-shell">
@@ -498,13 +547,14 @@ function ChatView({ documents, navigate, announce }: { documents: DocumentRecord
         {messages.length ? <div className="thread active"><span>●</span><b>{messages.find((item) => item.role === "user")?.text || "Platform assistant"}</b><small>{Math.ceil(messages.length / 2)}</small></div> : <EmptyState compact title="No conversations" description="Send a message to begin." />}
       </aside>
       <section className="chat-main">
-        <div className="chat-head"><div><h2>Platform assistant</h2><span><Dot /> Built-in assistant · {documents.length} uploaded document{documents.length === 1 ? "" : "s"}</span></div><div><button aria-label={favorite ? "Remove favorite" : "Favorite conversation"} onClick={() => setFavorite(!favorite)}>{favorite ? "★" : "☆"}</button><button disabled={!messages.length} onClick={() => void shareConversation()}>Share</button><button disabled={!messages.length} onClick={exportConversation}>Export</button><button disabled={!messages.length} onClick={newConversation}>Clear</button></div></div>
+        <div className="chat-head"><div><h2>Private document assistant</h2><span><Dot /> Document Q&amp;A · {documents.length} uploaded document{documents.length === 1 ? "" : "s"}</span></div><div><button aria-label={favorite ? "Remove favorite" : "Favorite conversation"} onClick={() => setFavorite(!favorite)}>{favorite ? "★" : "☆"}</button><button disabled={!messages.length} onClick={() => void shareConversation()}>Share</button><button disabled={!messages.length} onClick={exportConversation}>Export</button><button disabled={!messages.length} onClick={newConversation}>Clear</button></div></div>
         <div className="messages">
-          {messages.length === 0 && <div className="chat-welcome"><EmptyState title="How can I help?" description="Ask about uploads, your document status, available features, or how to configure PrivateAI." /><div className="prompt-chips">{["How do I upload a document?", "Show my uploaded documents", "What is working right now?"].map((prompt) => <button key={prompt} onClick={() => submit(prompt)}>{prompt}</button>)}</div></div>}
-          {messages.map((item, index) => <div className={`message ${item.role}`} key={item.id}><div className="avatar">{item.role === "assistant" ? "PA" : "PG"}</div><div><span className="message-author">{item.role === "assistant" ? "PrivateAI assistant" : "You"}</span><p>{item.text}</p>{item.role === "assistant" && <div className="message-tools"><button onClick={async () => announce(await copyText(item.text) ? "Response copied" : "Unable to copy response")}>Copy</button><button className={item.rating === "good" ? "active" : ""} onClick={() => rate(item.id, "good")}>Good</button><button className={item.rating === "bad" ? "active" : ""} onClick={() => rate(item.id, "bad")}>Bad</button><button onClick={() => regenerate(index)}>Regenerate</button></div>}</div></div>)}
+          {messages.length === 0 && <div className="chat-welcome"><EmptyState title="Ask your private documents" description="I’ll extract relevant passages from uploaded PDFs and text files and show exactly which files support the answer." /><div className="prompt-chips">{["Summarize my uploaded documents", "Show my uploaded documents", "How do I upload a document?"].map((prompt) => <button key={prompt} disabled={replying} onClick={() => void submit(prompt)}>{prompt}</button>)}</div></div>}
+          {messages.map((item, index) => <div className={`message ${item.role}`} key={item.id}><div className="avatar">{item.role === "assistant" ? "PA" : "PG"}</div><div><span className="message-author">{item.role === "assistant" ? "PrivateAI assistant" : "You"}</span><p>{item.text}</p>{item.sources && item.sources.length > 0 && <div className="message-sources"><b>Sources</b>{item.sources.map((source) => <span key={source}>{source}</span>)}</div>}{item.role === "assistant" && <div className="message-tools"><button onClick={async () => announce(await copyText(item.text) ? "Response copied" : "Unable to copy response")}>Copy</button><button className={item.rating === "good" ? "active" : ""} onClick={() => rate(item.id, "good")}>Good</button><button className={item.rating === "bad" ? "active" : ""} onClick={() => rate(item.id, "bad")}>Bad</button><button disabled={replying} onClick={() => void regenerate(index)}>Regenerate</button></div>}</div></div>)}
+          {replying && <div className="message assistant pending"><div className="avatar">PA</div><div><span className="message-author">PrivateAI assistant</span><p><Dot /> Searching your private documents…</p></div></div>}
         </div>
-        <div className="composer"><textarea aria-label="Message PrivateAI" placeholder="Ask about setup or your uploaded documents…" value={message} onChange={(e) => setMessage(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }} /><div><button className="composer-link" onClick={() => navigate("knowledge")}>＋ Upload document</button><span>Knowledge: {documents.length} file{documents.length === 1 ? "" : "s"}</span><button aria-label="Send message" disabled={!message.trim()} onClick={() => submit()}>↑</button></div></div>
-        <small className="chat-disclaimer">Built-in operational guidance only. Connect a local model and index for generative answers from document contents.</small>
+        <div className="composer"><textarea aria-label="Message PrivateAI" placeholder="Ask a question about your uploaded documents…" disabled={replying} value={message} onChange={(e) => setMessage(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void submit(); } }} /><div><button className="composer-link" onClick={() => navigate("knowledge")}>＋ Upload document</button><span>Knowledge: {documents.length} file{documents.length === 1 ? "" : "s"}</span><button aria-label="Send message" disabled={!message.trim() || replying} onClick={() => void submit()}>↑</button></div></div>
+        <small className="chat-disclaimer">Answers are extracted from your private files and include sources. Scanned PDFs require OCR, which is not yet configured.</small>
       </section>
     </div>
   );

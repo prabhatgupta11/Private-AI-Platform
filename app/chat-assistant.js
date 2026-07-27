@@ -40,6 +40,17 @@ export function builtInReply(input, documents) {
   return "I can help with PrivateAI setup, document uploads, document status, deletion, and currently available features. For open-ended generative answers or questions about document contents, connect a local model and indexing pipeline.";
 }
 
+/** @param {string} input */
+export function shouldUseBuiltInAssistant(input) {
+  const normalized = input.trim().toLowerCase();
+  return /^(hi|hey|hello|good (morning|afternoon|evening))[\s!.?]*$/.test(normalized)
+    || /(upload|add|ingest).*(document|file)|how.*upload/.test(normalized)
+    || /(document|file|knowledge).*(show|list|have|uploaded|status)|(?:show|list).*(document|file)/.test(normalized)
+    || /(what.*work|capabilit|can you do|help|getting started|start)/.test(normalized)
+    || /(model|llm|inference|chat model)/.test(normalized)
+    || /(delete|remove).*(document|file)/.test(normalized);
+}
+
 /** @param {{ role: "user" | "assistant", text: string }[]} messages */
 export function conversationText(messages) {
   return messages

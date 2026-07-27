@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
-import { builtInReply, conversationText } from "../app/chat-assistant.js";
+import { builtInReply, conversationText, shouldUseBuiltInAssistant } from "../app/chat-assistant.js";
+import { answerFromDocuments } from "../app/retrieval.js";
 
 const projectRoot = new URL("../", import.meta.url);
 
@@ -127,6 +128,46 @@ test("provides a functional and honest built-in chat assistant", () => {
   assert.match(documents, /2 uploaded documents.*policy\.pdf.*handbook\.docx/);
   assert.match(model, /No generative model is connected yet/);
   assert.match(transcript, /You: hey[\s\S]*PrivateAI: Hello!/);
+  assert.equal(shouldUseBuiltInAssistant("hey"), true);
+  assert.equal(shouldUseBuiltInAssistant("what Kashika do?"), false);
+});
+
+test("answers open questions from extracted document passages with sources", () => {
+  const answer = answerFromDocuments("what Kashika do?", [
+    {
+      name: "team-profile.pdf",
+      text: "Our team combines strategy and delivery. Kashika leads customer research and turns the findings into product requirements. She also coordinates stakeholder reviews.",
+    },
+    {
+      name: "pricing.txt",
+      text: "Enterprise pricing is available on request.",
+    },
+  ]);
+  const missing = answerFromDocuments("Where is the Tokyo office?", [
+    { name: "team-profile.pdf", text: "The company has an office in Delhi." },
+  ]);
+
+  assert.match(answer.answer, /what the uploaded documents say about Kashika/i);
+  assert.match(answer.answer, /Kashika leads customer research/);
+  assert.deepEqual(answer.sources, ["team-profile.pdf"]);
+  assert.match(missing.answer, /could not find content related/);
+});
+
+test("reads stored PDFs privately for document-grounded chat", async () => {
+  const [route, page, packageJson] = await Promise.all([
+    readFile(new URL("../app/api/chat/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../package.json", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(route, /extractText, getDocumentProxy/);
+  assert.match(route, /env\.DOCUMENTS\.get/);
+  assert.match(route, /privateai-text\.txt/);
+  assert.match(route, /answerFromDocuments/);
+  assert.match(page, /fetch\("\/api\/chat"/);
+  assert.match(page, /Searching your private documents/);
+  assert.match(page, /item\.sources/);
+  assert.match(packageJson, /"unpdf"/);
 });
 
 test("ships branded metadata and no starter artifacts", async () => {

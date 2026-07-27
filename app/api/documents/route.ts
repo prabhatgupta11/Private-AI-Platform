@@ -132,7 +132,10 @@ export async function DELETE(request: Request) {
       return Response.json({ error: "Document not found." }, { status: 404 });
     }
 
-    await env.DOCUMENTS.delete(document.objectKey);
+    await env.DOCUMENTS.delete([
+      document.objectKey,
+      `${document.objectKey}.privateai-text.txt`,
+    ]);
     await db.delete(documents).where(eq(documents.id, id));
     return Response.json({ deleted: true });
   } catch (error) {
