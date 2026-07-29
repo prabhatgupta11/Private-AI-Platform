@@ -1,12 +1,12 @@
 import { desc, inArray } from "drizzle-orm";
-import { env } from "cloudflare:workers";
 import { ensureDocumentsSchema, getDb } from "../../../db";
 import { documents } from "../../../db/schema";
 import { indexDocument, localAIHealth } from "../../local-rag";
 import { isAuthorized, checkRateLimit } from "../auth";
+import { getVectorStoreProvider } from "../../providers/vector";
 import { log } from "../../logger";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 
 export async function GET(request: Request) {
   if (!isAuthorized(request)) {
@@ -19,23 +19,15 @@ export async function GET(request: Request) {
   }
   await ensureDocumentsSchema();
   const health = await localAIHealth();
-  const counts = await Promise.all([
-    envCount("SELECT COUNT(*) AS count FROM document_chunks"),
-    envCount("SELECT COUNT(*) AS count FROM documents WHERE status = 'ready'"),
-  ]);
+  const counts = await getVectorStoreProvider().counts();
   return Response.json({
     ...health,
     vectorStore: {
-      type: "local-sqlite",
-      chunks: counts[0],
-      indexedDocuments: counts[1],
+      type: process.env.VECTOR_DB_TYPE || "local-sqlite",
+      chunks: counts.chunks,
+      indexedDocuments: counts.indexedDocuments,
     },
   }, { status: health.ready ? 200 : 503 });
-}
-
-async function envCount(sql: string) {
-  const result = await env.DB.prepare(sql).first<{ count: number }>();
-  return result?.count ?? 0;
 }
 
 export async function POST(request: Request) {

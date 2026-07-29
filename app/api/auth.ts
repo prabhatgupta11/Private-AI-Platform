@@ -1,18 +1,10 @@
-import { env } from "cloudflare:workers";
-
-interface RuntimeEnv {
-  API_KEY?: string;
-}
-
 /**
  * Checks if the request is authorized.
  * If API_KEY environment variable is configured, it validates authorization headers.
  * If API_KEY is not configured, it returns true for backward compatibility.
  */
 export function isAuthorized(request: Request): boolean {
-  const runtime = env as RuntimeEnv;
-  // Fall back to process.env if env.API_KEY is not bound (depends on vinext build mode)
-  const configuredKey = runtime.API_KEY || (typeof process !== "undefined" ? process.env.API_KEY : undefined);
+  const configuredKey = process.env.API_KEY;
 
   if (!configuredKey) {
     return true; // Passwordless default

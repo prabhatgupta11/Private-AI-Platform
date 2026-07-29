@@ -10,7 +10,7 @@ import {
 import { isAuthorized, checkRateLimit } from "../auth";
 import { log } from "../../logger";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 
 const MAX_QUESTION_LENGTH = 1000;
 const MAX_DOCUMENTS = 20;
@@ -67,7 +67,7 @@ export async function POST(request: Request) {
     }
 
     const indexingErrors: { name: string; error: string }[] = [];
-    for (const document of rows.filter((row) => row.status !== "ready")) {
+    for (const document of rows.filter((row: typeof documents.$inferSelect) => row.status !== "ready")) {
       try {
         await indexDocument(document);
       } catch (error) {
