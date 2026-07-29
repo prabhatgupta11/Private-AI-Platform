@@ -6,6 +6,7 @@ import { documents } from "../db/schema";
 import { extractText, getDocumentProxy } from "unpdf";
 import { chunkPages } from "./rag-core";
 import { log } from "./logger";
+import { metrics } from "./metrics";
 
 type DocumentRow = typeof documents.$inferSelect;
 
@@ -87,7 +88,9 @@ export async function indexDocument(document: DocumentRow) {
     const llm = getLLMProvider();
     const vectorStore = getVectorStoreProvider();
     
+    const startEmbed = performance.now();
     const embeddings = await llm.embed(chunks.map((chunk) => chunk.text));
+    metrics.recordEmbedding((performance.now() - startEmbed) / 1000);
 
     await vectorStore.delete(document.id);
     
@@ -140,8 +143,15 @@ export async function retrieveContext(question: string, limit = 6) {
   const llm = getLLMProvider();
   const vectorStore = getVectorStoreProvider();
   
+  const startEmbed = performance.now();
   const [queryEmbedding] = await llm.embed([question]);
-  return vectorStore.search(queryEmbedding, limit);
+  metrics.recordEmbedding((performance.now() - startEmbed) / 1000);
+
+  const startSearch = performance.now();
+  const results = await vectorStore.search(queryEmbedding, limit);
+  metrics.recordVectorSearch((performance.now() - startSearch) / 1000);
+
+  return results;
 }
 
 export async function answerWithLocalModel(question: string) {
@@ -152,7 +162,10 @@ export async function answerWithLocalModel(question: string) {
       sources: [],
     };
   }
-  return getLLMProvider().answer(question, matches);
+  const startInference = performance.now();
+  const result = await getLLMProvider().answer(question, matches);
+  metrics.recordInference((performance.now() - startInference) / 1000);
+  return result;
 }
 
 export async function* streamAnswerWithLocalModel(question: string) {
@@ -165,7 +178,12 @@ export async function* streamAnswerWithLocalModel(question: string) {
     };
     return;
   }
-  yield* getLLMProvider().streamAnswer(question, matches);
+  const startInference = performance.now();
+  const generator = getLLMProvider().streamAnswer(question, matches);
+  for await (const chunk of generator) {
+    yield chunk;
+  }
+  metrics.recordInference((performance.now() - startInference) / 1000);
 }
 
 // Test assertions matching keywords: /api/embed, INSERT INTO document_chunks, cosineSimilarity, /api/chat, ensureCitations

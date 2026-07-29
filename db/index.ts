@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { drizzle as drizzleSqlite } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";

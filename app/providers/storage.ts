@@ -48,8 +48,7 @@ class LocalStorageProvider implements StorageProvider {
 
   async put(
     key: string,
-    body: ReadableStream | ArrayBuffer | string,
-    options?: { contentType?: string }
+    body: ReadableStream | ArrayBuffer | string
   ): Promise<void> {
     const filePath = this.getPath(key);
     const buffer = await this.bodyToBuffer(body);

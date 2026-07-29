@@ -1,0 +1,10 @@
+node_modules
+.next
+.wrangler
+.openai
+dist
+output.log
+data
+*.db
+*.log
+.git

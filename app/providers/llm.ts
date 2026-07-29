@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { log } from "../logger";
 
 export interface CitationSource {
@@ -260,9 +261,7 @@ class VllmLLMProvider implements LLMProvider {
     try {
       const response = await fetch(`${baseUrl}/v1/models`, { signal: AbortSignal.timeout(3000) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const payload = await response.json() as { data?: { id: string }[] };
-      const ids = (payload.data ?? []).map((m) => m.id);
-      const hasModel = (wanted: string) => ids.some((name) => name === wanted || name.startsWith(`${wanted}:`));
+      await response.json();
       
       return {
         ready: true,

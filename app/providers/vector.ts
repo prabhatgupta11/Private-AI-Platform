@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { getDb, runRawSql } from "../../db";
 import { cosineSimilarity } from "../rag-core";
 import { log } from "../logger";
