@@ -11,7 +11,9 @@
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "local:setup": "bash scripts/local-ai-setup.sh",
+    "local:health": "node scripts/local-ai-health.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

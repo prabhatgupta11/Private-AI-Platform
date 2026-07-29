@@ -2,14 +2,15 @@ import { desc, eq } from "drizzle-orm";
 import { env } from "cloudflare:workers";
 import { ensureDocumentsSchema, getDb } from "../../../db";
 import { documents } from "../../../db/schema";
+import { deleteDocumentVectors } from "../../local-rag";
+import { isAuthorized, checkRateLimit } from "../auth";
+import { log } from "../../logger";
 
 export const runtime = "edge";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
 const allowedExtensions = new Set([
-  "pdf", "doc", "docx", "txt", "csv", "xls", "xlsx", "md", "html", "htm",
-  "xml", "json", "ppt", "pptx", "png", "jpg", "jpeg", "webp", "tiff", "tif",
-  "mp3", "wav", "m4a", "mp4", "mov", "webm", "zip", "py", "js", "ts", "tsx",
+  "pdf", "txt", "csv", "md", "html", "htm", "xml", "json", "py", "js", "ts", "tsx",
   "jsx", "java", "go", "rs", "sql", "yaml", "yml",
 ]);
 
@@ -25,8 +26,16 @@ function extensionFor(name: string) {
   return name.toLowerCase().split(".").pop() ?? "";
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    if (!isAuthorized(request)) {
+      log.warn("GET /api/documents - Unauthorized access attempt");
+      return Response.json({ error: "Unauthorized access." }, { status: 401 });
+    }
+    if (!checkRateLimit(request, 60)) {
+      log.warn("GET /api/documents - Rate limit exceeded");
+      return Response.json({ error: "Too many requests. Please try again later." }, { status: 429 });
+    }
     await ensureDocumentsSchema();
     const rows = await getDb()
       .select()
@@ -42,6 +51,14 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    if (!isAuthorized(request)) {
+      log.warn("POST /api/documents - Unauthorized access attempt");
+      return Response.json({ error: "Unauthorized access." }, { status: 401 });
+    }
+    if (!checkRateLimit(request, 30)) { // limit document uploads more strictly
+      log.warn("POST /api/documents - Rate limit exceeded");
+      return Response.json({ error: "Too many requests. Please try again later." }, { status: 429 });
+    }
     await ensureDocumentsSchema();
     if (!request.headers.get("content-type")?.includes("multipart/form-data")) {
       return Response.json({ error: "Upload files using multipart form data." }, { status: 400 });
@@ -115,6 +132,14 @@ export async function POST(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
+    if (!isAuthorized(request)) {
+      log.warn("DELETE /api/documents - Unauthorized access attempt");
+      return Response.json({ error: "Unauthorized access." }, { status: 401 });
+    }
+    if (!checkRateLimit(request, 30)) {
+      log.warn("DELETE /api/documents - Rate limit exceeded");
+      return Response.json({ error: "Too many requests. Please try again later." }, { status: 429 });
+    }
     await ensureDocumentsSchema();
     const id = new URL(request.url).searchParams.get("id")?.trim();
     if (!id) {
@@ -135,7 +160,9 @@ export async function DELETE(request: Request) {
     await env.DOCUMENTS.delete([
       document.objectKey,
       `${document.objectKey}.privateai-text.txt`,
+      `${document.objectKey}.privateai-extracted.json`,
     ]);
+    await deleteDocumentVectors(document.id);
     await db.delete(documents).where(eq(documents.id, id));
     return Response.json({ deleted: true });
   } catch (error) {

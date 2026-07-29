@@ -1,62 +1,36 @@
 import { desc } from "drizzle-orm";
-import { env } from "cloudflare:workers";
-import { extractText, getDocumentProxy } from "unpdf";
 import { ensureDocumentsSchema, getDb } from "../../../db";
 import { documents } from "../../../db/schema";
-import { answerFromDocuments } from "../../retrieval";
+import {
+  answerWithLocalModel,
+  indexDocument,
+  localAIHealth,
+  streamAnswerWithLocalModel,
+} from "../../local-rag";
+import { isAuthorized, checkRateLimit } from "../auth";
+import { log } from "../../logger";
 
 export const runtime = "edge";
 
 const MAX_QUESTION_LENGTH = 1000;
-const MAX_DOCUMENT_SIZE = 15 * 1024 * 1024;
-const MAX_DOCUMENTS = 12;
-const textExtensions = new Set([
-  "txt", "csv", "md", "html", "htm", "xml", "json", "py", "js", "ts", "tsx",
-  "jsx", "java", "go", "rs", "sql", "yaml", "yml",
-]);
-
-function extensionFor(name: string) {
-  return name.toLowerCase().split(".").pop() ?? "";
-}
-
-async function extractDocumentText(document: typeof documents.$inferSelect) {
-  const cacheKey = `${document.objectKey}.privateai-text.txt`;
-  const cached = await env.DOCUMENTS.get(cacheKey);
-  if (cached) return cached.text();
-
-  if (document.size > MAX_DOCUMENT_SIZE) return null;
-  const object = await env.DOCUMENTS.get(document.objectKey);
-  if (!object) return null;
-
-  const extension = extensionFor(document.name);
-  let text: string | null = null;
-
-  if (extension === "pdf" || document.contentType === "application/pdf") {
-    const buffer = await object.arrayBuffer();
-    const pdf = await getDocumentProxy(new Uint8Array(buffer));
-    const extracted = await extractText(pdf, { mergePages: true });
-    text = extracted.text;
-  } else if (document.contentType.startsWith("text/") || textExtensions.has(extension)) {
-    text = await object.text();
-  }
-
-  const cleaned = text?.replace(/\u0000/g, " ").trim();
-  if (!cleaned) return null;
-
-  await env.DOCUMENTS.put(cacheKey, cleaned, {
-    httpMetadata: { contentType: "text/plain; charset=utf-8" },
-    customMetadata: { sourceDocumentId: document.id },
-  });
-  return cleaned;
-}
+const MAX_DOCUMENTS = 20;
 
 export async function POST(request: Request) {
   try {
+    if (!isAuthorized(request)) {
+      log.warn("POST /api/chat - Unauthorized access attempt");
+      return Response.json({ error: "Unauthorized access." }, { status: 401 });
+    }
+    if (!checkRateLimit(request, 30)) {
+      log.warn("POST /api/chat - Rate limit exceeded");
+      return Response.json({ error: "Too many requests. Please try again later." }, { status: 429 });
+    }
+
     if (!request.headers.get("content-type")?.includes("application/json")) {
       return Response.json({ error: "Send the question as JSON." }, { status: 400 });
     }
 
-    const payload = await request.json() as { question?: unknown };
+    const payload = await request.json() as { question?: unknown; stream?: boolean };
     const question = typeof payload.question === "string" ? payload.question.trim() : "";
     if (!question) {
       return Response.json({ error: "Question is required." }, { status: 400 });
@@ -66,12 +40,25 @@ export async function POST(request: Request) {
     }
 
     await ensureDocumentsSchema();
+    const health = await localAIHealth();
+    if (!health.reachable) {
+      return Response.json({
+        error: "Local Ollama is not running. Start Ollama, then run `npm run local:setup`.",
+        localAI: health,
+      }, { status: 503 });
+    }
+    if (!health.ready) {
+      return Response.json({
+        error: `Local models are missing: ${health.missingModels.join(", ")}. Run \`npm run local:setup\`.`,
+        localAI: health,
+      }, { status: 503 });
+    }
+
     const rows = await getDb()
       .select()
       .from(documents)
       .orderBy(desc(documents.createdAt))
       .limit(MAX_DOCUMENTS);
-
     if (rows.length === 0) {
       return Response.json({
         answer: "Upload at least one PDF or text document before asking document-based questions.",
@@ -79,32 +66,74 @@ export async function POST(request: Request) {
       });
     }
 
-    const readable = [];
-    const failed = [];
-    for (const document of rows) {
+    const indexingErrors: { name: string; error: string }[] = [];
+    for (const document of rows.filter((row) => row.status !== "ready")) {
       try {
-        const text = await extractDocumentText(document);
-        if (text) readable.push({ name: document.name, text });
-      } catch {
-        failed.push(document.name);
+        await indexDocument(document);
+      } catch (error) {
+        indexingErrors.push({
+          name: document.name,
+          error: error instanceof Error ? error.message : "Indexing failed.",
+        });
       }
     }
 
-    if (readable.length === 0) {
-      return Response.json({
-        answer: "I found uploaded files, but none could be read yet. Text-based PDFs, TXT, Markdown, CSV, HTML, JSON, and code files are currently supported.",
-        sources: [],
-        unreadable: failed,
+    const acceptsEventStream = request.headers.get("accept")?.includes("text/event-stream");
+    const wantsStream = payload.stream === true || (payload.stream !== false && acceptsEventStream);
+
+    if (wantsStream) {
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        async start(controller) {
+          try {
+            const generator = streamAnswerWithLocalModel(question);
+            for await (const chunk of generator) {
+              if (chunk.type === "sources") {
+                controller.enqueue(encoder.encode(`event: sources\ndata: ${JSON.stringify(chunk.sources)}\n\n`));
+              } else if (chunk.type === "text") {
+                controller.enqueue(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: chunk.content })}\n\n`));
+              } else if (chunk.type === "answer") {
+                controller.enqueue(encoder.encode(`event: answer\ndata: ${JSON.stringify({ content: chunk.content, sources: chunk.sources })}\n\n`));
+              }
+            }
+            controller.enqueue(encoder.encode("event: done\ndata: {}\n\n"));
+            controller.close();
+          } catch (err) {
+            log.error("Streaming error in /api/chat:", err);
+            const errMsg = err instanceof Error ? err.message : "Error during streaming response.";
+            controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: errMsg })}\n\n`));
+            controller.close();
+          }
+        }
+      });
+
+      return new Response(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "Connection": "keep-alive",
+        },
       });
     }
 
+    const result = await answerWithLocalModel(question);
     return Response.json({
-      ...answerFromDocuments(question, readable),
-      searchedDocuments: readable.length,
-      unreadable: failed,
+      ...result,
+      searchedDocuments: rows.length - indexingErrors.length,
+      indexingErrors,
+      pipeline: [
+        "extracted_text",
+        "chunking",
+        "local_embedding",
+        "local_vector_search",
+        "relevant_context",
+        "local_llm",
+        "cited_answer",
+      ],
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to search documents.";
+    const message = error instanceof Error ? error.message : "Unable to answer from local documents.";
     return Response.json({ error: message }, { status: 500 });
   }
 }
+

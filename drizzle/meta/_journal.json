@@ -8,6 +8,13 @@
       "when": 1785117670075,
       "tag": "0000_redundant_power_pack",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1785129314239,
+      "tag": "0001_brown_avengers",
+      "breakpoints": true
     }
   ]
 }

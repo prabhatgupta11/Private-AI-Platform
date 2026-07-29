@@ -13,7 +13,26 @@ import { builtInReply, conversationText, shouldUseBuiltInAssistant } from "./cha
 
 type View = (typeof navItems)[number][0];
 
-const pipeline = ["Upload", "OCR", "Clean", "Detect", "Chunk", "PII", "Embed", "Index", "Ready"];
+async function fetchWithAuth(url: string, options: RequestInit = {}) {
+  const token = typeof window !== "undefined" ? window.localStorage.getItem("privateai-token") : null;
+  const headers = new Headers(options.headers);
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  const response = await fetch(url, { ...options, headers });
+  if (response.status === 401) {
+    if (typeof window !== "undefined") {
+      const newToken = window.prompt("This deployment requires an API Key. Please enter your Access Token:");
+      if (newToken) {
+        window.localStorage.setItem("privateai-token", newToken.trim());
+        window.location.reload();
+      }
+    }
+  }
+  return response;
+}
+
+const pipeline = ["Extract text", "Chunk", "Embed locally", "Vector store", "Retrieve context", "Local LLM", "Cited answer"];
 
 type DocumentRecord = {
   id: string;
@@ -22,7 +41,27 @@ type DocumentRecord = {
   size: number;
   contentType: string;
   status: string;
+  chunkCount: number;
+  indexedAt?: string | null;
+  indexError?: string | null;
   createdAt: string;
+};
+
+type CitationSource = {
+  citation: string;
+  documentId: string;
+  name: string;
+  page: number;
+  excerpt: string;
+  score: number;
+};
+
+type LocalAIStatus = {
+  ready: boolean;
+  reachable: boolean;
+  chatModel: string;
+  embedModel: string;
+  vectorStore?: { chunks: number; indexedDocuments: number };
 };
 
 type AssistantMessage = {
@@ -30,7 +69,7 @@ type AssistantMessage = {
   role: "user" | "assistant";
   text: string;
   rating?: "good" | "bad";
-  sources?: string[];
+  sources?: (CitationSource | string)[];
 };
 
 function formatBytes(bytes: number) {
@@ -141,11 +180,27 @@ function EmptyState({
 
 function Overview({ navigate, documents }: { navigate: (view: View) => void; documents: DocumentRecord[] }) {
   const storedBytes = documents.reduce((total, document) => total + document.size, 0);
+  const [localAI, setLocalAI] = useState<LocalAIStatus | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetchWithAuth("/api/index", { cache: "no-store" })
+      .then((response) => response.json() as Promise<LocalAIStatus>)
+      .then((status) => {
+        if (!cancelled) setLocalAI(status);
+      })
+      .catch(() => {
+        if (!cancelled) setLocalAI(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const indexedDocuments = documents.filter((document) => document.status === "ready").length;
   return (
     <>
       <section className="hero-panel">
         <div className="hero-copy">
-          <div className="status-pill"><Dot /> No external AI provider is connected</div>
+          <div className="status-pill"><Dot tone={localAI?.ready ? "green" : "amber"} /> {localAI?.ready ? "Local AI is ready · no external provider" : "Local AI setup required"}</div>
           <h1>The control plane for your private AI estate.</h1>
           <p>
             Ingest enterprise knowledge, route workloads across local models, deploy governed
@@ -158,27 +213,27 @@ function Overview({ navigate, documents }: { navigate: (view: View) => void; doc
           <div className="trust-row">
             <span><Dot /> Self-hosting ready</span>
             <span><Dot /> OpenAI-compatible design</span>
-            <span><Dot /> Local inference when connected</span>
+            <span><Dot /> Local inference with Ollama</span>
           </div>
         </div>
         <div className="hero-visual" aria-label="Private AI request flow">
-          <div className="flow-title"><span>PRIVATE AI REQUEST FLOW</span><Tag>Not configured</Tag></div>
+          <div className="flow-title"><span>PRIVATE AI REQUEST FLOW</span><Tag tone={localAI?.ready ? "green" : "amber"}>{localAI?.ready ? "LOCAL & READY" : "SETUP REQUIRED"}</Tag></div>
           <div className="flow-node node-client">
             <span className="node-icon">API</span>
-            <span><b>No client applications</b><small>Create an API key after configuring a model</small></span>
-            <span className="flow-rate">0 r/s</span>
+            <span><b>Private document chat</b><small>{documents.length} local document{documents.length === 1 ? "" : "s"}</small></span>
+            <span className="flow-rate">Local</span>
           </div>
           <div className="flow-line"><span /></div>
           <div className="flow-node node-gateway">
             <span className="node-icon accent">GW</span>
-            <span><b>Private AI Gateway</b><small>Policy · Routing · Observability</small></span>
-            <span className="flow-rate">Offline</span>
+            <span><b>Local RAG pipeline</b><small>Extract · Embed · Retrieve · Cite</small></span>
+            <span className="flow-rate">{indexedDocuments} indexed</span>
           </div>
           <div className="branch-lines"><i /><i /><i /></div>
           <div className="model-nodes">
-            <div><b>No model</b><small>Fast Q&A</small><em>0%</em></div>
-            <div><b>No model</b><small>Reasoning</small><em>0%</em></div>
-            <div><b>No model</b><small>Extraction</small><em>0%</em></div>
+            <div><b>{localAI?.chatModel || "Qwen setup"}</b><small>Local answers</small><em>{localAI?.ready ? "Ready" : "Off"}</em></div>
+            <div><b>{localAI?.embedModel || "Embedding setup"}</b><small>Local embeddings</small><em>{localAI?.ready ? "Ready" : "Off"}</em></div>
+            <div><b>SQLite vectors</b><small>Persistent retrieval</small><em>{localAI?.vectorStore?.chunks || 0}</em></div>
           </div>
           <div className="data-boundary">DESIGNED FOR PRIVATE NETWORK DEPLOYMENT</div>
         </div>
@@ -187,7 +242,7 @@ function Overview({ navigate, documents }: { navigate: (view: View) => void; doc
       <div className="metric-grid">
         <Metric label="Uploaded documents" value={documents.length.toLocaleString()} detail="real records" />
         <Metric label="Storage used" value={formatBytes(storedBytes)} detail="private object storage" />
-        <Metric label="AI requests" value="0" detail="no model configured" />
+        <Metric label="Vector chunks" value={(localAI?.vectorStore?.chunks || documents.reduce((total, document) => total + (document.chunkCount || 0), 0)).toLocaleString()} detail="stored locally" />
         <Metric label="Active workflows" value="0" detail="none created" />
       </div>
 
@@ -200,7 +255,7 @@ function Overview({ navigate, documents }: { navigate: (view: View) => void; doc
           <div className="pipeline">
             {pipeline.map((step, index) => (
               <div className="pipeline-step" key={step}>
-                <span>{index === 0 && documents.length > 0 ? "✓" : "○"}</span>
+                <span>{indexedDocuments > 0 || (index === 0 && documents.length > 0) ? "✓" : "○"}</span>
                 <small>{step}</small>
               </div>
             ))}
@@ -212,8 +267,8 @@ function Overview({ navigate, documents }: { navigate: (view: View) => void; doc
               <div className="activity-row" key={document.id}>
                 <span className="file-icon">DOC</span>
                 <span><b>{document.name}</b><small>{formatBytes(document.size)}</small></span>
-                <Tag tone="green">Stored</Tag>
-                <time>{formatDate(document.createdAt)}</time>
+                <Tag tone={document.status === "ready" ? "green" : "amber"}>{document.status === "ready" ? "Indexed" : "Stored"}</Tag>
+                <time>{formatDate(document.indexedAt || document.createdAt)}</time>
               </div>
             ))}
           </div>
@@ -289,6 +344,7 @@ function Knowledge({
   const [showUpload, setShowUpload] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [deletingId, setDeletingId] = useState("");
+  const [indexingId, setIndexingId] = useState("");
   const [uploadError, setUploadError] = useState("");
   const [query, setQuery] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
@@ -305,9 +361,21 @@ function Knowledge({
     Array.from(files).forEach((file) => body.append("files", file));
 
     try {
-      const response = await fetch("/api/documents", { method: "POST", body });
-      const payload = await response.json() as { error?: string };
+      const response = await fetchWithAuth("/api/documents", { method: "POST", body });
+      const payload = await response.json() as { documents?: DocumentRecord[]; error?: string };
       if (!response.ok) throw new Error(payload.error || "Upload failed.");
+      const ids = (payload.documents ?? []).map((document) => document.id);
+      if (ids.length) {
+        const indexResponse = await fetchWithAuth("/api/index", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ documentIds: ids }),
+        });
+        if (!indexResponse.ok) {
+          const indexPayload = await indexResponse.json() as { error?: string };
+          setUploadError(`Files uploaded, but indexing is waiting: ${indexPayload.error || "Local AI is unavailable."}`);
+        }
+      }
       await reloadDocuments();
       setShowUpload(false);
     } catch (error) {
@@ -318,11 +386,36 @@ function Knowledge({
     }
   };
 
+  const indexOne = async (document: DocumentRecord) => {
+    setIndexingId(document.id);
+    setUploadError("");
+    try {
+      const response = await fetchWithAuth("/api/index", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ documentIds: [document.id] }),
+      });
+      const payload = await response.json() as { error?: string; failed?: { error: string }[] };
+      if (!response.ok || payload.failed?.length) {
+        throw new Error(payload.error || payload.failed?.[0]?.error || "Indexing failed.");
+      }
+      await reloadDocuments();
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : "Indexing failed.");
+      await reloadDocuments();
+    } finally {
+      setIndexingId("");
+    }
+  };
+
+  const indexedCount = documents.filter((document) => document.status === "ready").length;
+  const queuedCount = documents.filter((document) => document.status === "stored" || document.status === "indexing").length;
+
   const deleteDocument = async (document: DocumentRecord) => {
     setDeletingId(document.id);
     setUploadError("");
     try {
-      const response = await fetch(`/api/documents?id=${encodeURIComponent(document.id)}`, { method: "DELETE" });
+      const response = await fetchWithAuth(`/api/documents?id=${encodeURIComponent(document.id)}`, { method: "DELETE" });
       const payload = await response.json() as { error?: string };
       if (!response.ok) throw new Error(payload.error || "Delete failed.");
       await reloadDocuments();
@@ -351,13 +444,13 @@ function Knowledge({
             type="file"
             multiple
             aria-label="Choose documents to upload"
-            accept=".pdf,.doc,.docx,.txt,.csv,.xls,.xlsx,.md,.html,.xml,.json,.ppt,.pptx,.png,.jpg,.jpeg,.webp,.tiff,.mp3,.wav,.m4a,.mp4,.mov,.webm,.zip,.py,.js,.ts,.tsx,.jsx,.java,.go,.rs,.sql,.yaml,.yml"
+            accept=".pdf,.txt,.csv,.md,.html,.xml,.json,.py,.js,.ts,.tsx,.jsx,.java,.go,.rs,.sql,.yaml,.yml"
             onChange={(event) => {
               if (event.target.files) void uploadFiles(event.target.files);
             }}
           />
           <span className="upload-icon">↑</span>
-          <div><b>Drop files here</b><small>PDF, Office, images, audio, video, archives, and code · up to 50 MB each</small></div>
+          <div><b>Drop files here</b><small>Text-based PDF, TXT, Markdown, CSV, HTML, JSON, YAML, and code · up to 50 MB each</small></div>
           <button className="btn btn-secondary" onClick={() => fileInput.current?.click()} disabled={uploading}>{uploading ? "Uploading…" : "Choose files"}</button>
         </div>
       )}
@@ -365,8 +458,8 @@ function Knowledge({
       <div className="metric-grid">
         <Metric label="Documents" value={documents.length.toLocaleString()} detail="persisted records" />
         <Metric label="Storage used" value={formatBytes(totalBytes)} detail="private object storage" />
-        <Metric label="Processing queue" value="0" detail="processing not configured" />
-        <Metric label="Indexed" value="0" detail="connect an embedding pipeline" />
+        <Metric label="Processing queue" value={queuedCount.toLocaleString()} detail="local indexing" />
+        <Metric label="Indexed" value={indexedCount.toLocaleString()} detail={`${documents.reduce((total, document) => total + (document.chunkCount || 0), 0)} vector chunks`} />
       </div>
       <section className="panel">
         <div className="toolbar">
@@ -375,7 +468,7 @@ function Knowledge({
         </div>
         <div className="data-table knowledge-table">
           <div className="table-row table-head"><span>Name</span><span>Owner</span><span>Version</span><span>Status</span><span>Updated</span><span /></div>
-          {filteredDocuments.map((document) => <div className="table-row" key={document.id}><span className="doc-name"><i>{document.name.split(".").pop()?.slice(0, 3).toUpperCase() || "DOC"}</i><b>{document.name}<small>{formatBytes(document.size)} · {document.contentType}</small></b></span><span>Local upload</span><span>v1</span><span><Tag tone="green">Stored</Tag></span><time>{formatDate(document.createdAt)}</time><button aria-label={`Delete ${document.name}`} disabled={deletingId === document.id} onClick={() => void deleteDocument(document)}>{deletingId === document.id ? "…" : "Delete"}</button></div>)}
+          {filteredDocuments.map((document) => <div className="table-row" key={document.id}><span className="doc-name"><i>{document.name.split(".").pop()?.slice(0, 3).toUpperCase() || "DOC"}</i><b>{document.name}<small>{formatBytes(document.size)} · {document.chunkCount || 0} chunks{document.indexError ? ` · ${document.indexError}` : ""}</small></b></span><span>Local upload</span><span>v1</span><span><Tag tone={document.status === "ready" ? "green" : document.status === "index_failed" ? "red" : "amber"}>{document.status === "ready" ? "Indexed" : document.status === "index_failed" ? "Failed" : document.status === "indexing" ? "Indexing" : "Stored"}</Tag></span><time>{formatDate(document.indexedAt || document.createdAt)}</time><span className="row-actions">{document.status !== "ready" && <button aria-label={`Index ${document.name}`} disabled={indexingId === document.id} onClick={() => void indexOne(document)}>{indexingId === document.id ? "…" : "Index"}</button>}<button aria-label={`Delete ${document.name}`} disabled={deletingId === document.id} onClick={() => void deleteDocument(document)}>{deletingId === document.id ? "…" : "Delete"}</button></span></div>)}
         </div>
         {loading ? <EmptyState compact title="Loading documents" description="Reading your private document library." /> : filteredDocuments.length === 0 && <EmptyState title={query ? "No matching documents" : "No documents uploaded"} description={query ? "Try a different filename." : "Choose a file above to create your first real record."} />}
         <div className="table-footer"><span>Showing {filteredDocuments.length} of {documents.length} documents</span></div>
@@ -395,7 +488,7 @@ function SearchView({ documents, navigate }: { documents: DocumentRecord[]; navi
   const search = () => setSubmittedQuery(query.trim());
   return (
     <>
-      <SectionHeader eyebrow="DOCUMENT SEARCH" title="Find your uploaded files." description="Filename search works now. Content and semantic search will become available after an indexing pipeline is connected." />
+      <SectionHeader eyebrow="DOCUMENT SEARCH" title="Find your uploaded files." description="Search filenames here, or use AI Chat for local semantic retrieval across indexed document content." />
       <div className="search-hero">
         <div className="main-search"><span>⌕</span><input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") search(); }} aria-label="Search uploaded document names" placeholder="Search document names…" /><kbd>⌘ K</kbd><button onClick={search}>Search</button></div>
         <div className="search-options"><Tag tone="green">Filename search live</Tag><span>Scope: Uploaded documents</span><span>Sort: Newest first</span><button disabled={!submittedQuery} onClick={() => setSaved(!saved)}>{saved ? "★ Saved" : "☆ Save search"}</button></div>
@@ -441,54 +534,114 @@ function ChatView({ documents, navigate, announce }: { documents: DocumentRecord
     if (!historyReady) return;
     window.localStorage.setItem("privateai-chat", JSON.stringify(messages));
   }, [historyReady, messages]);
-  const answerQuestion = async (question: string) => {
-    if (shouldUseBuiltInAssistant(question)) {
-      return { text: builtInReply(question, documents), sources: [] };
-    }
 
-    const response = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
-    });
-    const payload = await response.json() as { answer?: string; sources?: string[]; error?: string };
-    if (!response.ok) throw new Error(payload.error || "Unable to search your documents.");
-    return {
-      text: payload.answer || "I could not find an answer in the uploaded documents.",
-      sources: payload.sources ?? [],
-    };
-  };
   const submit = async (text = message) => {
     const trimmed = text.trim();
     if (!trimmed || replying) return;
+
     const userMessage: AssistantMessage = { id: crypto.randomUUID(), role: "user", text: trimmed };
     setMessages((current) => [...current, userMessage]);
     setMessage("");
     setReplying(true);
+
+    if (shouldUseBuiltInAssistant(trimmed)) {
+      setMessages((current) => [...current, {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        text: builtInReply(trimmed, documents),
+        sources: [],
+      }]);
+      setReplying(false);
+      return;
+    }
+
+    const assistantMessageId = crypto.randomUUID();
+    setMessages((current) => [...current, {
+      id: assistantMessageId,
+      role: "assistant",
+      text: "",
+      sources: [],
+    }]);
+
     try {
-      const result = await answerQuestion(trimmed);
-      setMessages((current) => [...current, {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        text: result.text,
-        sources: result.sources,
-      }]);
+      const response = await fetchWithAuth("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "text/event-stream"
+        },
+        body: JSON.stringify({ question: trimmed, stream: true }),
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(payload.error || "Unable to search your documents.");
+      }
+
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.includes("text/event-stream")) {
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error("No response body reader.");
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            if (line.startsWith("data: ")) {
+              const dataText = line.slice(6).trim();
+              if (dataText === "{}") continue;
+              try {
+                const data = JSON.parse(dataText);
+                if (Array.isArray(data)) {
+                  setMessages((current) => current.map((m) => m.id === assistantMessageId ? {
+                    ...m,
+                    sources: data,
+                  } : m));
+                } else if (data.content !== undefined) {
+                  setMessages((current) => current.map((m) => m.id === assistantMessageId ? {
+                    ...m,
+                    text: m.text + data.content,
+                  } : m));
+                } else if (data.error !== undefined) {
+                  throw new Error(data.error);
+                }
+              } catch {}
+            }
+          }
+        }
+      } else {
+        const payload = await response.json() as { answer?: string; sources?: CitationSource[] };
+        setMessages((current) => current.map((m) => m.id === assistantMessageId ? {
+          ...m,
+          text: payload.answer || "I could not find an answer in the uploaded documents.",
+          sources: payload.sources ?? [],
+        } : m));
+      }
     } catch (error) {
-      setMessages((current) => [...current, {
-        id: crypto.randomUUID(),
-        role: "assistant",
+      setMessages((current) => current.map((m) => m.id === assistantMessageId ? {
+        ...m,
         text: error instanceof Error ? `I could not search the documents: ${error.message}` : "I could not search the documents.",
-      }]);
+      } : m));
     } finally {
       setReplying(false);
     }
   };
+
   const newConversation = () => {
     setMessages([]);
     setMessage("");
     setFavorite(false);
     announce("New conversation started");
   };
+
   const exportConversation = () => {
     if (!messages.length) return;
     const blob = new Blob([conversationText(messages)], { type: "text/plain" });
@@ -502,6 +655,7 @@ function ChatView({ documents, navigate, announce }: { documents: DocumentRecord
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     announce("Conversation exported");
   };
+
   const shareConversation = async () => {
     if (!messages.length) return;
     const text = conversationText(messages);
@@ -516,25 +670,93 @@ function ChatView({ documents, navigate, announce }: { documents: DocumentRecord
     const copied = await copyText(text);
     announce(copied ? "Conversation copied for sharing" : "Unable to share conversation");
   };
+
   const rate = (id: string, rating: "good" | "bad") => {
     setMessages((current) => current.map((item) => item.id === id ? { ...item, rating: item.rating === rating ? undefined : rating } : item));
     announce(rating === "good" ? "Marked as helpful" : "Feedback recorded");
   };
+
   const regenerate = async (index: number) => {
     const prompt = [...messages].slice(0, index).reverse().find((item) => item.role === "user");
     if (!prompt || replying) return;
     setReplying(true);
+
+    setMessages((current) => current.map((item, itemIndex) => itemIndex === index ? {
+      ...item,
+      text: "",
+      sources: [],
+      rating: undefined,
+    } : item));
+
     try {
-      const result = await answerQuestion(prompt.text);
+      const response = await fetchWithAuth("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "text/event-stream"
+        },
+        body: JSON.stringify({ question: prompt.text, stream: true }),
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(payload.error || "Unable to search your documents.");
+      }
+
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.includes("text/event-stream")) {
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error("No response body reader.");
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            if (line.startsWith("data: ")) {
+              const dataText = line.slice(6).trim();
+              if (dataText === "{}") continue;
+              try {
+                const data = JSON.parse(dataText);
+                if (Array.isArray(data)) {
+                  setMessages((current) => current.map((item, itemIndex) => itemIndex === index ? {
+                    ...item,
+                    sources: data,
+                  } : item));
+                } else if (data.content !== undefined) {
+                  setMessages((current) => current.map((item, itemIndex) => itemIndex === index ? {
+                    ...item,
+                    text: item.text + data.content,
+                  } : item));
+                } else if (data.error !== undefined) {
+                  throw new Error(data.error);
+                }
+              } catch {}
+            }
+          }
+        }
+        announce("Response regenerated");
+      } else {
+        const payload = await response.json() as { answer?: string; sources?: CitationSource[] };
+        setMessages((current) => current.map((item, itemIndex) => itemIndex === index ? {
+          ...item,
+          text: payload.answer || "I could not find an answer in the uploaded documents.",
+          sources: payload.sources ?? [],
+        } : item));
+        announce("Response regenerated");
+      }
+    } catch (error) {
       setMessages((current) => current.map((item, itemIndex) => itemIndex === index ? {
         ...item,
-        text: result.text,
-        sources: result.sources,
-        rating: undefined,
+        text: error instanceof Error ? `I could not search the documents: ${error.message}` : "I could not search the documents.",
       } : item));
-      announce("Response regenerated");
-    } catch (error) {
-      announce(error instanceof Error ? error.message : "Unable to regenerate response");
     } finally {
       setReplying(false);
     }
@@ -550,11 +772,11 @@ function ChatView({ documents, navigate, announce }: { documents: DocumentRecord
         <div className="chat-head"><div><h2>Private document assistant</h2><span><Dot /> Document Q&amp;A · {documents.length} uploaded document{documents.length === 1 ? "" : "s"}</span></div><div><button aria-label={favorite ? "Remove favorite" : "Favorite conversation"} onClick={() => setFavorite(!favorite)}>{favorite ? "★" : "☆"}</button><button disabled={!messages.length} onClick={() => void shareConversation()}>Share</button><button disabled={!messages.length} onClick={exportConversation}>Export</button><button disabled={!messages.length} onClick={newConversation}>Clear</button></div></div>
         <div className="messages">
           {messages.length === 0 && <div className="chat-welcome"><EmptyState title="Ask your private documents" description="I’ll extract relevant passages from uploaded PDFs and text files and show exactly which files support the answer." /><div className="prompt-chips">{["Summarize my uploaded documents", "Show my uploaded documents", "How do I upload a document?"].map((prompt) => <button key={prompt} disabled={replying} onClick={() => void submit(prompt)}>{prompt}</button>)}</div></div>}
-          {messages.map((item, index) => <div className={`message ${item.role}`} key={item.id}><div className="avatar">{item.role === "assistant" ? "PA" : "PG"}</div><div><span className="message-author">{item.role === "assistant" ? "PrivateAI assistant" : "You"}</span><p>{item.text}</p>{item.sources && item.sources.length > 0 && <div className="message-sources"><b>Sources</b>{item.sources.map((source) => <span key={source}>{source}</span>)}</div>}{item.role === "assistant" && <div className="message-tools"><button onClick={async () => announce(await copyText(item.text) ? "Response copied" : "Unable to copy response")}>Copy</button><button className={item.rating === "good" ? "active" : ""} onClick={() => rate(item.id, "good")}>Good</button><button className={item.rating === "bad" ? "active" : ""} onClick={() => rate(item.id, "bad")}>Bad</button><button disabled={replying} onClick={() => void regenerate(index)}>Regenerate</button></div>}</div></div>)}
-          {replying && <div className="message assistant pending"><div className="avatar">PA</div><div><span className="message-author">PrivateAI assistant</span><p><Dot /> Searching your private documents…</p></div></div>}
+          {messages.map((item, index) => <div className={`message ${item.role}`} key={item.id}><div className="avatar">{item.role === "assistant" ? "PA" : "PG"}</div><div><span className="message-author">{item.role === "assistant" ? "PrivateAI assistant" : "You"}</span><p>{item.text}</p>{item.sources && item.sources.length > 0 && <div className="message-sources"><b>Sources</b>{item.sources.map((source) => typeof source === "string" ? <span key={source}>{source}</span> : <span key={`${source.citation}:${source.documentId}:${source.page}`} title={source.excerpt}>{source.citation} {source.name} · page {source.page}</span>)}</div>}{item.role === "assistant" && <div className="message-tools"><button onClick={async () => announce(await copyText(item.text) ? "Response copied" : "Unable to copy response")}>Copy</button><button className={item.rating === "good" ? "active" : ""} onClick={() => rate(item.id, "good")}>Good</button><button className={item.rating === "bad" ? "active" : ""} onClick={() => rate(item.id, "bad")}>Bad</button><button disabled={replying} onClick={() => void regenerate(index)}>Regenerate</button></div>}</div></div>)}
+          {replying && <div className="message assistant pending"><div className="avatar">PA</div><div><span className="message-author">PrivateAI assistant</span><p><Dot /> Extracting, embedding, retrieving, and asking your local model…</p></div></div>}
         </div>
         <div className="composer"><textarea aria-label="Message PrivateAI" placeholder="Ask a question about your uploaded documents…" disabled={replying} value={message} onChange={(e) => setMessage(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void submit(); } }} /><div><button className="composer-link" onClick={() => navigate("knowledge")}>＋ Upload document</button><span>Knowledge: {documents.length} file{documents.length === 1 ? "" : "s"}</span><button aria-label="Send message" disabled={!message.trim() || replying} onClick={() => void submit()}>↑</button></div></div>
-        <small className="chat-disclaimer">Answers are extracted from your private files and include sources. Scanned PDFs require OCR, which is not yet configured.</small>
+        <small className="chat-disclaimer">Documents, embeddings, retrieval, and generation stay on this machine. Answers include file and page citations. Scanned PDFs require OCR.</small>
       </section>
     </div>
   );
@@ -637,9 +859,9 @@ function Developers() {
   };
   return (
     <>
-      <SectionHeader eyebrow="DEVELOPER PLATFORM" title="Start with the live document API." description="Document upload, listing, and deletion are available now. Inference, search, agents, and workflows remain on the platform roadmap." action={<button className="btn btn-secondary" disabled>API reference coming soon</button>} />
+      <SectionHeader eyebrow="DEVELOPER PLATFORM" title="Use the live local RAG APIs." description="Document upload, local indexing, health checks, cited chat, listing, and deletion are available now. Agents and workflows remain on the roadmap." action={<button className="btn btn-secondary" disabled>API reference coming soon</button>} />
       <div className="dev-layout">
-        <section className="panel endpoint-list"><span className="kicker">API ENDPOINTS</span>{["/api/documents", "/v1/chat/completions", "/v1/embeddings", "/v1/search", "/v1/workflows", "/v1/agents", "/v1/models"].map((e, i) => <button className={i === 0 ? "active" : ""} disabled={i > 0} onClick={() => setLang("curl")} key={e}><Tag tone={i === 0 ? "green" : "neutral"}>{i === 0 ? "LIVE" : "PLANNED"}</Tag><code>{e}</code><span>›</span></button>)}</section>
+        <section className="panel endpoint-list"><span className="kicker">API ENDPOINTS</span>{["/api/documents", "/api/index", "/api/chat", "/v1/workflows", "/v1/agents"].map((e, i) => <button className={i === 0 ? "active" : ""} disabled={i > 2} onClick={() => setLang("curl")} key={e}><Tag tone={i <= 2 ? "green" : "neutral"}>{i <= 2 ? "LIVE" : "PLANNED"}</Tag><code>{e}</code><span>›</span></button>)}</section>
         <section className="code-panel"><div className="code-tabs">{["curl", "python", "node"].map(l => <button className={lang === l ? "active" : ""} onClick={() => setLang(l)} key={l}>{l === "node" ? "Node.js" : l[0].toUpperCase() + l.slice(1)}</button>)}<button className="copy-code" onClick={async () => {
           const success = await copyText(code[lang]);
           setCopied(success);
@@ -762,7 +984,7 @@ export default function Home() {
     setDocumentsLoading(true);
     setDocumentsError("");
     try {
-      const response = await fetch("/api/documents", { cache: "no-store" });
+      const response = await fetchWithAuth("/api/documents", { cache: "no-store" });
       const payload = await response.json() as { documents?: DocumentRecord[]; error?: string };
       if (!response.ok) throw new Error(payload.error || "Unable to load documents.");
       setDocuments(payload.documents ?? []);
@@ -774,7 +996,7 @@ export default function Home() {
   }, []);
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/documents", { cache: "no-store" })
+    fetchWithAuth("/api/documents", { cache: "no-store" })
       .then(async (response) => {
         const payload = await response.json() as { documents?: DocumentRecord[]; error?: string };
         if (!response.ok) throw new Error(payload.error || "Unable to load documents.");
@@ -809,7 +1031,15 @@ export default function Home() {
           <span className="brand-mark"><i /><i /><i /></span>
           <span><b>PrivateAI</b><small>PLATFORM</small></span>
         </div>
-        <div className="environment"><span><Dot /> Production</span><button aria-label="Switch environment" disabled title="Only one environment is configured">⌄</button></div>
+        <div className="environment">
+          <span><Dot /> Production</span>
+          {typeof window !== "undefined" && window.localStorage.getItem("privateai-token") && (
+            <button aria-label="Clear API Key" onClick={() => {
+              window.localStorage.removeItem("privateai-token");
+              window.location.reload();
+            }} title="Clear API Key" style={{ border: 0, background: "transparent", color: "var(--muted)", cursor: "pointer", fontSize: "11px" }}>Reset 🔑</button>
+          )}
+        </div>
         <nav aria-label="Platform navigation">
           <span className="nav-label">CONTROL PLANE</span>
           {navItems.slice(0, 10).map(([id, label, icon]) => <button key={id} className={view === id ? "active" : ""} onClick={() => navigate(id)}><span className="nav-icon">{icon}</span><span>{label}</span></button>)}

@@ -3,6 +3,7 @@ import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 import { builtInReply, conversationText, shouldUseBuiltInAssistant } from "../app/chat-assistant.js";
 import { answerFromDocuments } from "../app/retrieval.js";
+import { buildGroundedPrompt, chunkPages, cosineSimilarity, ensureCitations } from "../app/rag-core.js";
 
 const projectRoot = new URL("../", import.meta.url);
 
@@ -153,21 +154,59 @@ test("answers open questions from extracted document passages with sources", () 
   assert.match(missing.answer, /could not find content related/);
 });
 
-test("reads stored PDFs privately for document-grounded chat", async () => {
-  const [route, page, packageJson] = await Promise.all([
+test("runs the complete local cited RAG pipeline", async () => {
+  const [route, indexRoute, rag, page, packageJson, migration, readme] = await Promise.all([
     readFile(new URL("../app/api/chat/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/index/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/local-rag.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0001_brown_avengers.sql", import.meta.url), "utf8"),
+    readFile(new URL("../README.md", import.meta.url), "utf8"),
   ]);
 
-  assert.match(route, /extractText, getDocumentProxy/);
-  assert.match(route, /env\.DOCUMENTS\.get/);
-  assert.match(route, /privateai-text\.txt/);
-  assert.match(route, /answerFromDocuments/);
-  assert.match(page, /fetch\("\/api\/chat"/);
-  assert.match(page, /Searching your private documents/);
+  assert.match(rag, /extractText, getDocumentProxy/);
+  assert.match(rag, /privateai-extracted\.json/);
+  assert.match(rag, /chunkPages/);
+  assert.match(rag, /\/api\/embed/);
+  assert.match(rag, /INSERT INTO document_chunks/);
+  assert.match(rag, /cosineSimilarity/);
+  assert.match(rag, /\/api\/chat/);
+  assert.match(rag, /ensureCitations/);
+  assert.match(route, /answerWithLocalModel/);
+  assert.match(route, /local_vector_search/);
+  assert.match(indexRoute, /localAIHealth/);
+  assert.match(migration, /CREATE TABLE `document_chunks`/);
+  assert.match(page, /fetch(WithAuth)?\("\/api\/chat"/);
+  assert.match(page, /Extracting, embedding, retrieving/);
   assert.match(page, /item\.sources/);
+  assert.match(page, /document\.chunkCount/);
   assert.match(packageJson, /"unpdf"/);
+  assert.match(packageJson, /"local:setup"/);
+  assert.match(readme, /fully local document RAG/i);
+});
+
+test("chunks pages, ranks vectors, and enforces citations deterministically", () => {
+  const chunks = chunkPages([
+    { page: 1, text: "Kashika leads customer research. ".repeat(60) },
+    { page: 2, text: "She converts findings into product requirements. ".repeat(30) },
+  ], { chunkSize: 300, overlap: 50 });
+  assert.ok(chunks.length > 3);
+  assert.equal(chunks[0].page, 1);
+  assert.ok(chunks.some((chunk) => chunk.page === 2));
+  assert.equal(chunks[0].chunkIndex, 0);
+  assert.ok(cosineSimilarity([1, 0], [1, 0]) > 0.99);
+  assert.ok(cosineSimilarity([1, 0], [0, 1]) < 0.01);
+
+  const matches = [{
+    citation: "[S1]",
+    documentName: "team.pdf",
+    page: 2,
+    text: "Kashika leads customer research.",
+  }];
+  assert.match(buildGroundedPrompt("What does Kashika do?", matches), /\[S1\][\s\S]*team\.pdf[\s\S]*page: 2/);
+  assert.match(ensureCitations("Kashika leads research.", matches), /\[S1\] team\.pdf, page 2/);
+  assert.equal(ensureCitations("Kashika leads research [S1].", matches), "Kashika leads research [S1].");
 });
 
 test("ships branded metadata and no starter artifacts", async () => {

@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    container_name: privateai-app
+    ports:
+      - "3000:3000"
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_CHAT_MODEL=${OLLAMA_CHAT_MODEL:-qwen2.5:3b}
+      - OLLAMA_EMBED_MODEL=${OLLAMA_EMBED_MODEL:-nomic-embed-text}
+      - API_KEY=${API_KEY:-}
+    volumes:
+      - ./data/.wrangler:/app/.wrangler
+    depends_on:
+      - ollama
+      - ollama-setup
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/index"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: privateai-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    # Uncomment the block below if running on a VM with an Nvidia GPU
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  ollama-setup:
+    image: curlimages/curl:latest
+    container_name: privateai-ollama-setup
+    entrypoint: [ "sh", "-c" ]
+    command:
+      - |
+        echo "Waiting for Ollama to start..."
+        while ! curl -s http://ollama:11434/api/tags > /dev/null; do
+          sleep 1
+        done
+        echo "Ollama is ready. Pulling models..."
+        curl -X POST http://ollama:11434/api/pull -d '{"name": "qwen2.5:3b"}'
+        curl -X POST http://ollama:11434/api/pull -d '{"name": "nomic-embed-text"}'
+        echo "Models successfully pulled."
+    depends_on:
+      - ollama
+
+volumes:
+  ollama_data:
+
