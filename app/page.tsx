@@ -22,11 +22,7 @@ async function fetchWithAuth(url: string, options: RequestInit = {}) {
   const response = await fetch(url, { ...options, headers });
   if (response.status === 401) {
     if (typeof window !== "undefined") {
-      const newToken = window.prompt("This deployment requires an API Key. Please enter your Access Token:");
-      if (newToken) {
-        window.localStorage.setItem("privateai-token", newToken.trim());
-        window.location.reload();
-      }
+      window.dispatchEvent(new CustomEvent("privateai-unauthorized"));
     }
   }
   return response;
@@ -980,6 +976,22 @@ export default function Home() {
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
   const [documentsLoading, setDocumentsLoading] = useState(true);
   const [documentsError, setDocumentsError] = useState("");
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [inputKey, setInputKey] = useState("");
+
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      setShowAuthModal(true);
+    };
+    if (typeof window !== "undefined") {
+      window.addEventListener("privateai-unauthorized", handleUnauthorized);
+    }
+    return () => {
+      if (typeof window !== "undefined") {
+        window.removeEventListener("privateai-unauthorized", handleUnauthorized);
+      }
+    };
+  }, []);
   const reloadDocuments = useCallback(async () => {
     setDocumentsLoading(true);
     setDocumentsError("");
@@ -1068,6 +1080,35 @@ export default function Home() {
         </main>
       </div>
       {notice && <div className="toast"><Dot /> {notice}</div>}
+
+      {showAuthModal && (
+        <div className="auth-overlay">
+          <div className="auth-modal">
+            <span className="auth-icon">🔑</span>
+            <h3>Authentication Required</h3>
+            <p>This private deployment requires an API Access Token to communicate with the compute node.</p>
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              if (inputKey.trim()) {
+                window.localStorage.setItem("privateai-token", inputKey.trim());
+                window.location.reload();
+              }
+            }}>
+              <input
+                type="password"
+                placeholder="Enter Access Token..."
+                value={inputKey}
+                onChange={(e) => setInputKey(e.target.value)}
+                autoFocus
+                required
+              />
+              <div className="auth-actions">
+                <button type="submit" className="btn btn-primary">Connect Node</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
