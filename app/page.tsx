@@ -510,6 +510,15 @@ function ChatView({ documents, navigate, announce }: { documents: DocumentRecord
   const [favorite, setFavorite] = useState(false);
   const [historyReady, setHistoryReady] = useState(false);
   const [replying, setReplying] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
   useEffect(() => {
     let cancelled = false;
     Promise.resolve().then(() => {
@@ -770,6 +779,7 @@ function ChatView({ documents, navigate, announce }: { documents: DocumentRecord
           {messages.length === 0 && <div className="chat-welcome"><EmptyState title="Ask your private documents" description="I’ll extract relevant passages from uploaded PDFs and text files and show exactly which files support the answer." /><div className="prompt-chips">{["Summarize my uploaded documents", "Show my uploaded documents", "How do I upload a document?"].map((prompt) => <button key={prompt} disabled={replying} onClick={() => void submit(prompt)}>{prompt}</button>)}</div></div>}
           {messages.map((item, index) => <div className={`message ${item.role}`} key={item.id}><div className="avatar">{item.role === "assistant" ? "PA" : "PG"}</div><div><span className="message-author">{item.role === "assistant" ? "PrivateAI assistant" : "You"}</span><p>{item.text}</p>{item.sources && item.sources.length > 0 && <div className="message-sources"><b>Sources</b>{item.sources.map((source) => typeof source === "string" ? <span key={source}>{source}</span> : <span key={`${source.citation}:${source.documentId}:${source.page}`} title={source.excerpt}>{source.citation} {source.name} · page {source.page}</span>)}</div>}{item.role === "assistant" && <div className="message-tools"><button onClick={async () => announce(await copyText(item.text) ? "Response copied" : "Unable to copy response")}>Copy</button><button className={item.rating === "good" ? "active" : ""} onClick={() => rate(item.id, "good")}>Good</button><button className={item.rating === "bad" ? "active" : ""} onClick={() => rate(item.id, "bad")}>Bad</button><button disabled={replying} onClick={() => void regenerate(index)}>Regenerate</button></div>}</div></div>)}
           {replying && <div className="message assistant pending"><div className="avatar">PA</div><div><span className="message-author">PrivateAI assistant</span><p><Dot /> Extracting, embedding, retrieving, and asking your local model…</p></div></div>}
+          <div ref={messagesEndRef} />
         </div>
         <div className="composer"><textarea aria-label="Message PrivateAI" placeholder="Ask a question about your uploaded documents…" disabled={replying} value={message} onChange={(e) => setMessage(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void submit(); } }} /><div><button className="composer-link" onClick={() => navigate("knowledge")}>＋ Upload document</button><span>Knowledge: {documents.length} file{documents.length === 1 ? "" : "s"}</span><button aria-label="Send message" disabled={!message.trim() || replying} onClick={() => void submit()}>↑</button></div></div>
         <small className="chat-disclaimer">Documents, embeddings, retrieval, and generation stay on this machine. Answers include file and page citations. Scanned PDFs require OCR.</small>
