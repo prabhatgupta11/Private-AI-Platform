@@ -978,8 +978,10 @@ export default function Home() {
   const [documentsError, setDocumentsError] = useState("");
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [inputKey, setInputKey] = useState("");
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
+    setMounted(true);
     const handleUnauthorized = () => {
       setShowAuthModal(true);
     };
@@ -1045,7 +1047,7 @@ export default function Home() {
         </div>
         <div className="environment">
           <span><Dot /> Production</span>
-          {typeof window !== "undefined" && window.localStorage.getItem("privateai-token") && (
+           {mounted && window.localStorage.getItem("privateai-token") && (
             <button aria-label="Clear API Key" onClick={() => {
               window.localStorage.removeItem("privateai-token");
               window.location.reload();
