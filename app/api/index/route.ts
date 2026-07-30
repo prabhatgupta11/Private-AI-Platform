@@ -27,7 +27,7 @@ export async function GET(request: Request) {
       chunks: counts.chunks,
       indexedDocuments: counts.indexedDocuments,
     },
-  }, { status: health.ready ? 200 : 503 });
+  }, { status: 200 });
 }
 
 export async function POST(request: Request) {
@@ -46,7 +46,7 @@ export async function POST(request: Request) {
       const reason = health.reachable
         ? `Missing local models: ${health.missingModels.join(", ")}.`
         : "Local Ollama is not running.";
-      return Response.json({ error: `${reason} Run \`npm run local:setup\`.`, localAI: health }, { status: 503 });
+      return Response.json({ error: `${reason} Run \`npm run local:setup\`.`, localAI: health }, { status: 400 });
     }
 
     const payload = request.headers.get("content-type")?.includes("application/json")
